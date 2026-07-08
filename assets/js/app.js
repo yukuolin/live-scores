@@ -1175,20 +1175,20 @@
         }
         picks.sort(function (x, y) { return y.edge - x.edge; });
 
-        if (picks.length) {
-          oaNotes.push("<p>最看好:<b>" + esc(picks[0].label) + "</b>(估算命中率 " + pctStr(picks[0].prob) + ")。</p>");
-          if (picks.length >= 2) {
-            var comboProb = picks[0].prob * picks[1].prob;
-            oaNotes.push("<p>最看好組合:<b>" + esc(picks[0].label) + " + " + esc(picks[1].label) +
-              "</b>,估算同時命中機率約 <b>" + pctStr(comboProb) + "</b>(以獨立事件相乘估算)。</p>");
-          }
-        } else {
-          oaNotes.push("<p>模型與市場價格接近,本場未發現明顯價值面,建議觀望。</p>");
-        }
+        // if (picks.length) {
+        //   oaNotes.push("<p>模型:<b>" + esc(picks[0].label) + "</b>(估算命中率 " + pctStr(picks[0].prob) + ")。</p>");
+        //   if (picks.length >= 2) {
+        //     var comboProb = picks[0].prob * picks[1].prob;
+        //     oaNotes.push("<p>模型組合:<b>" + esc(picks[0].label) + " + " + esc(picks[1].label) +
+        //       "</b>,估算同時命中機率約 <b>" + pctStr(comboProb) + "</b>(以獨立事件相乘估算)。</p>");
+        //   }
+        // } else {
+        //   oaNotes.push("<p>模型與市場價格接近,本場未發現明顯價值面,建議觀望。</p>");
+        // }
 
         oaInner += '<div class="analysis-box" style="margin-top:10px">' + oaNotes.join("") + '</div>' +
           '<div class="detail-note">模型為戰績/近十場/先發投手之簡易統計推估,與市場價格比較僅供參考,不構成投注建議。</div>';
-        html += sectionBlock("美式盤口分析與最看好組合", oaInner);
+        html += sectionBlock("美式盤口分析", oaInner);
       }
 
       html += oddsDetailHtml(game);
@@ -1341,9 +1341,9 @@
           "(價值 " + (edgeH >= 0 ? "+" : "") + (edgeH * 100).toFixed(1) + "%);客隊 <b>" + pctStr(1 - modelH) +
           "</b> vs " + pctStr(oa.fairA) + "(價值 " + (edgeA >= 0 ? "+" : "") + (edgeA * 100).toFixed(1) + "%)。</p>");
         if (edgeH >= edgeA && edgeH > 0.02) {
-          oaNotes.push("<p>最看好:<b>主隊獨贏 " + esc(game.home.name) + "(ML " + esc(game.odds.mlHome.cur) + ")</b>(預測勝率 " + pctStr(modelH) + ")。</p>");
+          oaNotes.push("<p>模型:<b>主隊獨贏 " + esc(game.home.name) + "(ML " + esc(game.odds.mlHome.cur) + ")</b>(預測勝率 " + pctStr(modelH) + ")。</p>");
         } else if (edgeA > edgeH && edgeA > 0.02) {
-          oaNotes.push("<p>最看好:<b>客隊獨贏 " + esc(game.away.name) + "(ML " + esc(game.odds.mlAway.cur) + ")</b>(預測勝率 " + pctStr(1 - modelH) + ")。</p>");
+          oaNotes.push("<p>模型:<b>客隊獨贏 " + esc(game.away.name) + "(ML " + esc(game.odds.mlAway.cur) + ")</b>(預測勝率 " + pctStr(1 - modelH) + ")。</p>");
         } else {
           oaNotes.push("<p>預測與市場價格接近,本場未發現明顯價值面,建議觀望。</p>");
         }

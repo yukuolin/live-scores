@@ -8,7 +8,7 @@
     kbo: { label: "韓職 KBO", color: "#4a9b6e" },
   };
   var LEAGUE_ORDER = ["mlb", "nba", "npb", "kbo"];
-  var PLAYSPORT_ALLIANCE = { npb: 2, kbo: 9 };
+  var SPORTSDB_IDS = { npb: "4591", kbo: "4830" };
 
   var state = {
     date: new Date(),
@@ -318,93 +318,55 @@
     });
   }
 
-  function fetchPlaysportLeague(leagueKey, dateStr) {
-    var alliance = PLAYSPORT_ALLIANCE[leagueKey];
-    var gameday = dateStr.replace(/-/g, "");
-    var url = "https://ls.playsport.cc/ls_json.php?alliance=" + alliance +
-      "&gamedate=" + gameday + "&pbp=1&teamStat=1";
+  function fetchSportsDBLeague(leagueKey, dateStr) {
+    var leagueId = SPORTSDB_IDS[leagueKey];
+    var url = "https://www.thesportsdb.com/api/v1/json/123/eventsday.php?d=" + dateStr + "&l=" + leagueId;
     return fetchJson(url).then(function (data) {
-      var games = [];
-      Object.keys(data || {}).forEach(function (key) {
-        if (key === "use_memcache" || key === "timestamp") return;
-        var item = data[key];
-        if (!item || typeof item !== "object") return;
+      var events = data.events || [];
+      return events.map(function (e) {
+        var raw = (e.strStatus || "").toUpperCase();
+        var cat = "scheduled";
+        if (["FT", "AOT", "AET", "CANC", "POST"].indexOf(raw) !== -1) cat = "final";
+        else if (raw && raw !== "NS") cat = "live";
 
-        var startTime = null;
-        if (item.dateon) {
-          var candidate = String(item.dateon).replace(" ", "T");
-          var dt = new Date(candidate);
-          startTime = isNaN(dt.getTime()) ? null : candidate;
+        // strTimestamp is UTC but has no zone marker; append Z so it converts to local time
+        var ts = e.strTimestamp
+          ? (e.strTimestamp.indexOf("Z") === -1 ? e.strTimestamp + "Z" : e.strTimestamp)
+          : null;
+
+        var detail;
+        if (cat === "scheduled") {
+          detail = ts ? formatTime(ts) : (e.strTime ? e.strTime.slice(0, 5) : "");
+        } else if (cat === "live") {
+          detail = e.strProgress || raw || "進行中";
+        } else {
+          detail = "已完賽";
         }
 
-        var awayScore = Array.isArray(item.r) && item.r[0] !== undefined && item.r[0] !== "" ? Number(item.r[0]) : null;
-        var homeScore = Array.isArray(item.r) && item.r[1] !== undefined && item.r[1] !== "" ? Number(item.r[1]) : null;
+        var awayScore = e.intAwayScore !== null && e.intAwayScore !== undefined ? Number(e.intAwayScore) : null;
+        var homeScore = e.intHomeScore !== null && e.intHomeScore !== undefined ? Number(e.intHomeScore) : null;
 
-        var live = false;
-        var detail = "";
-        if (item.pbp && typeof item.pbp === "object" && item.pbp.pbpValue && String(item.pbp.pbpValue).trim()) {
-          live = true;
-          detail = String(item.pbp.pbpValue);
-        } else if (item.gs && item.gs.ss && String(item.gs.ss).trim()) {
-          live = true;
-          detail = String(item.gs.ss).trim();
-        } else if (item.gs && (item.gs.b || item.gs.o || item.gs.s) && String(item.gs.b || item.gs.o || item.gs.s).trim() !== "") {
-          live = true;
-          detail = String((item.gs && item.gs.ss) || "進行中").trim();
-        }
-
-        var status = "scheduled";
-        if (live) {
-          status = "live";
-        } else if (startTime) {
-          var startDate = new Date(startTime);
-          if (startDate.getTime() <= Date.now()) status = "final";
-        }
-
-        if (!detail) {
-          if (status === "scheduled") detail = formatTime(startTime);
-          else if (status === "live") detail = "進行中";
-          else detail = "已完賽";
-        }
-
-        var odds = null;
-        if (item.iaheadgame_w !== undefined && item.iaheadgame_w !== null && String(item.iaheadgame_w).trim() !== "") {
-          odds = { provider: "playsport" };
-          odds.mlAway = { cur: String(item.iaheadgame_w) };
-          if (item.iaheadgame !== undefined && item.iaheadgame !== null && String(item.iaheadgame).trim() !== "") {
-            odds.spAway = { line: String(item.iaheadgame), cur: String(item.iaheadgame_w) };
-          }
-        }
-
-        games.push({
-          id: leagueKey + "-" + key,
+        return {
+          id: leagueKey + "-" + e.idEvent,
           league: leagueKey,
-          raw: item,
-          status: status,
+          tsdbId: e.idEvent,
+          raw: e,
+          status: cat,
           detail: detail,
-          startTime: startTime,
-          odds: odds,
-          away: {
-            name: item.aname || item.aoriginname || "",
-            score: awayScore,
-            logo: null,
-          },
-          home: {
-            name: item.hname || item.horiginname || "",
-            score: homeScore,
-            logo: null,
-          },
-        });
+          startTime: ts,
+          odds: null,
+          away: { name: e.strAwayTeam, score: awayScore, logo: e.strAwayTeamBadge || null },
+          home: { name: e.strHomeTeam, score: homeScore, logo: e.strHomeTeamBadge || null },
+        };
       });
-      return games;
     });
   }
 
   var FETCHERS = {
     mlb: fetchMLB,
     nba: fetchNBA,
-    npb: function (d) { return fetchPlaysportLeague("npb", d); },
-    kbo: function (d) { return fetchPlaysportLeague("kbo", d); },
+    npb: function (d) { return fetchSportsDBLeague("npb", d); },
+    kbo: function (d) { return fetchSportsDBLeague("kbo", d); },
   };
 
   // ---------- notifications ----------
@@ -1480,7 +1442,7 @@
   }
 
   // ---------- modal control ----------
-  var DETAIL_RENDERERS = { mlb: renderMlbDetail, nba: renderNbaDetail, npb: renderPlaysportDetail, kbo: renderPlaysportDetail };
+  var DETAIL_RENDERERS = { mlb: renderMlbDetail, nba: renderNbaDetail, npb: renderTsdbDetail, kbo: renderTsdbDetail };
 
   function loadDetail(game) {
     var body = document.getElementById("modalBody");

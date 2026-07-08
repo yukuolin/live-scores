@@ -138,8 +138,8 @@
     var fairA = ipA / vig, fairH = ipH / vig;
 
     var rows = "";
-    rows += '<tr><td>獨贏(客)</td><td>' + esc(od.mlAway.cur) + '</td><td>' + pctStr(ipA) + '</td><td>' + pctStr(fairA) + '</td></tr>';
-    rows += '<tr><td>獨贏(主)</td><td>' + esc(od.mlHome.cur) + '</td><td>' + pctStr(ipH) + '</td><td>' + pctStr(fairH) + '</td></tr>';
+    rows += '<tr><td>勝負(客)</td><td>' + esc(od.mlAway.cur) + '</td><td>' + pctStr(ipA) + '</td><td>' + pctStr(fairA) + '</td></tr>';
+    rows += '<tr><td>勝負(主)</td><td>' + esc(od.mlHome.cur) + '</td><td>' + pctStr(ipH) + '</td><td>' + pctStr(fairH) + '</td></tr>';
     if (od.spAway && od.spAway.cur) {
       var ipSA = impliedProb(od.spAway.cur);
       rows += '<tr><td>讓分(客 ' + esc(od.spAway.line || "") + ')</td><td>' + esc(od.spAway.cur) + '</td><td>' + (ipSA !== null ? pctStr(ipSA) : "-") + '</td><td>-</td></tr>';
@@ -157,8 +157,8 @@
       rows += '<tr><td>小分 ' + esc(stripOU(od.under.line)) + '</td><td>' + esc(od.under.cur) + '</td><td>' + (ipU !== null ? pctStr(ipU) : "-") + '</td><td>-</td></tr>';
     }
     var tableHtml = '<div class="table-wrap"><table class="stat-table" style="min-width:380px">' +
-      '<tr><th>市場</th><th>美式賠率</th><th>隱含機率</th><th>去水機率</th></tr>' + rows + '</table></div>';
-    var vigNote = "<p>莊家水錢約 <b>" + ((vig - 1) * 100).toFixed(1) + "%</b>(獨贏隱含機率合計 " + pctStr(vig) + ",去水後即市場公平機率)。</p>";
+      '<tr><th>市場</th><th>美式賠率</th><th>隱含機率</th><th>正規化機率</th></tr>' + rows + '</table></div>';
+    var vigNote = "<p>隱含機率溢價約 <b>" + ((vig - 1) * 100).toFixed(1) + "%</b>(勝負隱含機率合計 " + pctStr(vig) + ",正規化後即市場中性機率)。</p>";
 
     return { tableHtml: tableHtml, vigNote: vigNote, fairA: fairA, fairH: fairH };
   }
@@ -703,8 +703,8 @@
       }
       var rows = "";
       if (od.mlAway) {
-        rows += '<tr><td>獨贏(客)' + '</td><td>' + openCell(od.mlAway) + '</td><td><b>' + cell(od.mlAway) + '</b></td></tr>';
-        rows += '<tr><td>獨贏(主)' + '</td><td>' + openCell(od.mlHome) + '</td><td><b>' + cell(od.mlHome) + '</b></td></tr>';
+        rows += '<tr><td>勝負(客)' + '</td><td>' + openCell(od.mlAway) + '</td><td><b>' + cell(od.mlAway) + '</b></td></tr>';
+        rows += '<tr><td>勝負(主)' + '</td><td>' + openCell(od.mlHome) + '</td><td><b>' + cell(od.mlHome) + '</b></td></tr>';
       }
       if (od.spAway) {
         rows += '<tr><td>讓分(客)</td><td>' + openCell(od.spAway) + '</td><td><b>' + cell(od.spAway) + '</b></td></tr>';
@@ -715,10 +715,10 @@
         rows += '<tr><td>小分</td><td>' + openCell(od.under) + '</td><td><b>' + cell(od.under) + '</b></td></tr>';
       }
       if (rows) {
-        html += sectionBlock("盤口" + (od.provider ? "(" + od.provider + ")" : ""),
+        html += sectionBlock("賠率" + (od.provider ? "(" + od.provider + ")" : ""),
           '<div class="table-wrap"><table class="stat-table" style="min-width:320px">' +
           '<tr><th>市場</th><th>開盤</th><th>目前</th></tr>' + rows + '</table></div>' +
-          '<div class="detail-note">美式賠率,僅供參考,不構成投注建議。</div>');
+          '<div class="detail-note">美式賠率,僅供參考。</div>');
       }
     }
 
@@ -727,7 +727,7 @@
       var items = log.slice(-12).reverse().map(function (e) {
         return '<li><span class="mt">' + formatTime(new Date(e.t).toISOString()) + '</span><span>' + esc(e.s) + '</span></li>';
       }).join("");
-      html += sectionBlock("盤口異動紀錄", '<ul class="move-list">' + items + '</ul>' +
+      html += sectionBlock("賠率異動紀錄", '<ul class="move-list">' + items + '</ul>' +
         '<div class="detail-note">僅記錄本瀏覽器開啟頁面期間觀測到的變化。</div>');
     }
     return html;
@@ -1120,12 +1120,12 @@
         p1Note(pp.home, homeP1);
         fiNotes.push('<p>綜合兩隊近況估算,本場 <b>NRFI(首局雙方皆未得分)機率約 ' + Math.round(nrfi) + '%</b>。</p>');
         inner += '<div class="analysis-box" style="margin-top:10px">' + fiNotes.join("") + '</div>' +
-          '<div class="detail-note">依兩隊近 ' + nGames + ' 場首局得失分與先發投手首局分項數據之簡易估算,僅供參考,不構成投注建議。</div>';
+          '<div class="detail-note">依兩隊近 ' + nGames + ' 場首局得失分與先發投手首局分項數據之簡易估算,僅供參考。</div>';
 
         html += sectionBlock("首局得失分分析(NRFI / YRFI)", inner);
       }
 
-      // American odds analysis & best-value combo
+      // American odds analysis (model vs. market implied probability)
       var oa = oddsImpliedAnalysis(game.odds);
       if (oa) {
         var oaInner = oa.tableHtml;
@@ -1157,38 +1157,16 @@
           }
         }
 
-        var picks = [];
         if (modelH !== null) {
           var edgeH = modelH - oa.fairH, edgeA = (1 - modelH) - oa.fairA;
-          oaNotes.push("<p>模型估計:主隊勝率 <b>" + pctStr(modelH) + "</b> vs 市場去水 " + pctStr(oa.fairH) +
-            "(價值 " + (edgeH >= 0 ? "+" : "") + (edgeH * 100).toFixed(1) + "%);客隊 <b>" + pctStr(1 - modelH) +
-            "</b> vs " + pctStr(oa.fairA) + "(價值 " + (edgeA >= 0 ? "+" : "") + (edgeA * 100).toFixed(1) + "%)。</p>");
-          if (edgeH >= edgeA && edgeH > 0.02) {
-            picks.push({ label: "主隊獨贏 " + game.home.name + "(ML " + game.odds.mlHome.cur + ")", prob: modelH, edge: edgeH });
-          } else if (edgeA > edgeH && edgeA > 0.02) {
-            picks.push({ label: "客隊獨贏 " + game.away.name + "(ML " + game.odds.mlAway.cur + ")", prob: 1 - modelH, edge: edgeA });
-          }
+          oaNotes.push("<p>模型估計:主隊勝率 <b>" + pctStr(modelH) + "</b>,市場隱含機率 " + pctStr(oa.fairH) +
+            "(差距 " + (edgeH >= 0 ? "+" : "") + (edgeH * 100).toFixed(1) + "%);客隊 <b>" + pctStr(1 - modelH) +
+            "</b>,市場隱含機率 " + pctStr(oa.fairA) + "(差距 " + (edgeA >= 0 ? "+" : "") + (edgeA * 100).toFixed(1) + "%)。</p>");
         }
-        if (nrfiProb !== null) {
-          if (nrfiProb >= 0.55) picks.push({ label: "NRFI 首局無得分", prob: nrfiProb, edge: nrfiProb - 0.5 });
-          else if (nrfiProb <= 0.45) picks.push({ label: "YRFI 首局有得分", prob: 1 - nrfiProb, edge: 0.5 - nrfiProb });
-        }
-        picks.sort(function (x, y) { return y.edge - x.edge; });
-
-        // if (picks.length) {
-        //   oaNotes.push("<p>模型:<b>" + esc(picks[0].label) + "</b>(估算命中率 " + pctStr(picks[0].prob) + ")。</p>");
-        //   if (picks.length >= 2) {
-        //     var comboProb = picks[0].prob * picks[1].prob;
-        //     oaNotes.push("<p>模型組合:<b>" + esc(picks[0].label) + " + " + esc(picks[1].label) +
-        //       "</b>,估算同時命中機率約 <b>" + pctStr(comboProb) + "</b>(以獨立事件相乘估算)。</p>");
-        //   }
-        // } else {
-        //   oaNotes.push("<p>模型與市場價格接近,本場未發現明顯價值面,建議觀望。</p>");
-        // }
 
         oaInner += '<div class="analysis-box" style="margin-top:10px">' + oaNotes.join("") + '</div>' +
-          '<div class="detail-note">模型為戰績/近十場/先發投手之簡易統計推估,與市場價格比較僅供參考,不構成投注建議。</div>';
-        html += sectionBlock("美式盤口分析", oaInner);
+          '<div class="detail-note">模型為戰績/近十場/先發投手之簡易統計推估,與市場數據比較僅供參考。</div>';
+        html += sectionBlock("美式賠率分析", oaInner);
       }
 
       html += oddsDetailHtml(game);
@@ -1337,20 +1315,20 @@
       if (aProj && hProj && aProj + hProj > 0) {
         var modelH = hProj / (aProj + hProj);
         var edgeH = modelH - oa.fairH, edgeA = (1 - modelH) - oa.fairA;
-        oaNotes.push("<p>ESPN 預測:主隊勝率 <b>" + pctStr(modelH) + "</b> vs 市場去水 " + pctStr(oa.fairH) +
-          "(價值 " + (edgeH >= 0 ? "+" : "") + (edgeH * 100).toFixed(1) + "%);客隊 <b>" + pctStr(1 - modelH) +
-          "</b> vs " + pctStr(oa.fairA) + "(價值 " + (edgeA >= 0 ? "+" : "") + (edgeA * 100).toFixed(1) + "%)。</p>");
+        oaNotes.push("<p>ESPN 預測:主隊勝率 <b>" + pctStr(modelH) + "</b>,市場隱含機率 " + pctStr(oa.fairH) +
+          "(差距 " + (edgeH >= 0 ? "+" : "") + (edgeH * 100).toFixed(1) + "%);客隊 <b>" + pctStr(1 - modelH) +
+          "</b>,市場隱含機率 " + pctStr(oa.fairA) + "(差距 " + (edgeA >= 0 ? "+" : "") + (edgeA * 100).toFixed(1) + "%)。</p>");
         if (edgeH >= edgeA && edgeH > 0.02) {
-          oaNotes.push("<p>模型:<b>主隊獨贏 " + esc(game.home.name) + "(ML " + esc(game.odds.mlHome.cur) + ")</b>(預測勝率 " + pctStr(modelH) + ")。</p>");
+          oaNotes.push("<p>模型預測:<b>" + esc(game.home.name) + "</b> 勝率 " + pctStr(modelH) + ",高於市場隱含機率 " + pctStr(oa.fairH) + "。</p>");
         } else if (edgeA > edgeH && edgeA > 0.02) {
-          oaNotes.push("<p>模型:<b>客隊獨贏 " + esc(game.away.name) + "(ML " + esc(game.odds.mlAway.cur) + ")</b>(預測勝率 " + pctStr(1 - modelH) + ")。</p>");
+          oaNotes.push("<p>模型預測:<b>" + esc(game.away.name) + "</b> 勝率 " + pctStr(1 - modelH) + ",高於市場隱含機率 " + pctStr(oa.fairA) + "。</p>");
         } else {
-          oaNotes.push("<p>預測與市場價格接近,本場未發現明顯價值面,建議觀望。</p>");
+          oaNotes.push("<p>模型預測與市場隱含機率接近,無明顯落差。</p>");
         }
       }
       oaInner += '<div class="analysis-box" style="margin-top:10px">' + oaNotes.join("") + '</div>' +
-        '<div class="detail-note">以 ESPN 勝率預測與市場去水機率比較,僅供參考,不構成投注建議。</div>';
-      html += sectionBlock("美式盤口分析", oaInner);
+        '<div class="detail-note">以 ESPN 勝率預測與市場隱含機率比較,僅供參考。</div>';
+      html += sectionBlock("美式賠率分析", oaInner);
     }
 
     if (!html) {

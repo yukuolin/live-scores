@@ -505,3 +505,203 @@ body {
   .content { padding: 14px; }
   .updated-at { display: none; }
 }
+
+/* ---------- bet log / odds history ---------- */
+.pos { color: #34c07c; }
+.neg { color: #ef4444; }
+
+.bet-actions {
+  display: flex; flex-wrap: wrap; align-items: center;
+  gap: 6px; margin-top: 10px;
+}
+.bet-actions-label { font-size: 12px; color: var(--text-faint); margin-right: 2px; }
+.bet-rec {
+  font: inherit; font-size: 12px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--bg-card);
+  color: var(--text-dim);
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+.bet-rec:hover { border-color: var(--accent); color: var(--text); }
+.bet-rec.done { border-color: #34c07c; color: #34c07c; cursor: default; }
+
+.bet-tiles {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  margin-top: 16px;
+}
+.bet-tile {
+  flex: 1 1 100px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.bet-tile .v { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.bet-tile .k { font-size: 11px; color: var(--text-faint); }
+.bet-tile.pos .v { color: #34c07c; }
+.bet-tile.neg .v { color: #ef4444; }
+
+.bet-res {
+  display: inline-block; min-width: 26px; text-align: center;
+  font-size: 11px; font-weight: 700;
+  padding: 2px 7px; border-radius: 10px;
+}
+.bet-res.win { background: rgba(52, 192, 124, 0.15); color: #34c07c; }
+.bet-res.loss { background: var(--live-bg); color: var(--live); }
+.bet-res.push { background: var(--final-bg); color: var(--text-dim); }
+.bet-res.pending { background: var(--scheduled-bg); color: var(--accent); }
+
+.bet-match { font-size: 11px; color: var(--text-faint); }
+.bet-live-tag {
+  font-size: 10px; color: var(--live);
+  border: 1px solid var(--live); border-radius: 8px;
+  padding: 0 5px; margin-left: 3px;
+}
+.bet-stake {
+  width: 58px;
+  font: inherit; font-size: 12px;
+  padding: 3px 6px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg-elev); color: var(--text);
+}
+.bet-del {
+  font: inherit; font-size: 11px;
+  border: none; background: none; cursor: pointer;
+  color: var(--text-faint); padding: 4px;
+}
+.bet-del:hover { color: var(--live); }
+.bet-toolbar { display: flex; gap: 10px; margin-top: 12px; }
+
+.text-btn {
+  font: inherit; font-size: 12px;
+  padding: 5px 12px;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg-card); color: var(--text-dim);
+  cursor: pointer;
+}
+.text-btn:hover { border-color: var(--accent); color: var(--text); }
+.text-btn.danger:hover { border-color: var(--live); color: var(--live); }
+
+.kelly-row {
+  display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px;
+}
+.kelly-row label {
+  display: flex; flex-direction: column; gap: 3px;
+  font-size: 11px; color: var(--text-faint);
+}
+.kelly-row input {
+  width: 86px;
+  font: inherit; font-size: 13px;
+  padding: 5px 8px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg-elev); color: var(--text);
+}
+.kelly-out {
+  margin-top: 10px; font-size: 13px; line-height: 1.7;
+  color: var(--text-dim); font-variant-numeric: tabular-nums;
+}
+
+.close-row td { background: var(--scheduled-bg); }
+.close-tag {
+  font-size: 10px; color: var(--accent);
+  border: 1px solid var(--accent); border-radius: 8px;
+  padding: 0 5px; margin-left: 4px;
+}
+
+/* ---------- line movement ---------- */
+.move-badge {
+  display: inline-block;
+  font-size: 11px; font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  padding: 1px 7px; margin-left: 6px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+.move-badge.home { background: rgba(52, 192, 124, 0.15); color: #34c07c; }
+.move-badge.away { background: rgba(224, 118, 44, 0.15); color: var(--accent); }
+
+.move-verdict {
+  font-size: 13px; font-weight: 600;
+  border-radius: 10px;
+  padding: 10px 14px;
+  margin-bottom: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-dim);
+}
+.move-verdict b { color: var(--text); }
+.move-verdict.home { border-color: rgba(52, 192, 124, 0.45); }
+.move-verdict.away { border-color: rgba(224, 118, 44, 0.45); }
+
+/* ---------- picks page ---------- */
+a.icon-btn.nav-link { text-decoration: none; }
+
+.picks-content { max-width: 860px; }
+.picks-intro { margin-bottom: 14px; }
+
+.pick-card {
+  display: flex;
+  gap: 14px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.pick-rank {
+  flex: 0 0 34px;
+  width: 34px; height: 34px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 16px; font-weight: 800;
+  display: flex; align-items: center; justify-content: center;
+}
+.pick-main { flex: 1; min-width: 0; }
+.pick-top {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  font-size: 11px; color: var(--text-faint);
+  margin-bottom: 4px;
+}
+.pick-type {
+  font-weight: 700;
+  padding: 1px 8px;
+  border-radius: 10px;
+  background: var(--scheduled-bg);
+  color: var(--accent);
+}
+.pick-type.nrfi { background: rgba(52, 192, 124, 0.15); color: #34c07c; }
+.pick-type.yrfi { background: var(--live-bg); color: var(--live); }
+.pick-weak {
+  padding: 1px 8px; border-radius: 10px;
+  border: 1px dashed var(--border);
+  color: var(--text-faint);
+}
+.pick-match { font-size: 14px; font-weight: 700; margin-bottom: 2px; }
+.pick-bet { font-size: 15px; margin: 4px 0 6px; }
+.pick-bet b { color: var(--text); }
+.pick-price {
+  margin-left: 8px;
+  font-size: 12px; font-weight: 700;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.pick-nums {
+  display: flex; flex-wrap: wrap; gap: 6px 16px;
+  font-size: 12px; color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  margin-bottom: 8px;
+}
+.pick-nums b { color: var(--text); }
+.pick-nums .pos b { color: #34c07c; }
+.pick-nums .neg b { color: #ef4444; }
+.pick-reasons {
+  margin: 0; padding-left: 18px;
+  font-size: 12px; line-height: 1.7;
+  color: var(--text-dim);
+}
+.pick-reasons b { color: var(--text); }

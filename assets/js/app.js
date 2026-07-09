@@ -23,7 +23,7 @@
   };
 
   var sched = { timeout: null, nextAt: 0 };
-  var modal = { game: null, timer: null };
+  var modal = { game: null, timer: null, betlog: false };
   var sectionCache = {};
   var mlbFormCache = { t: 0, map: null };
 
@@ -214,6 +214,352 @@
       try { arr = JSON.parse(store.get(k)) || []; } catch (e) { arr = []; }
       if (!arr.length || arr[arr.length - 1].t < cutoff) store.remove(k);
     });
+  }
+
+  // ---------- server-side odds history (collected by GitHub Actions cron) ----------
+  var oddsHistCache = {}; // league -> { t, data }
+  function fetchOddsHistory(league) {
+    if (league !== "mlb" && league !== "nba") return Promise.resolve(null);
+    var c = oddsHistCache[league];
+    if (c && Date.now() - c.t < 240000) return Promise.resolve(c.data);
+    return fetchJson("data/odds/" + league + ".json?t=" + Math.floor(Date.now() / 240000))
+      .then(function (d) { oddsHistCache[league] = { t: Date.now(), data: d }; return d; })
+      .catch(function () { return c ? c.data : null; });
+  }
+  function findHistEntry(data, espnId, awayName, homeName, startIso) {
+    if (!data || !data.events) return null;
+    if (espnId && data.events[espnId]) return data.events[espnId];
+    var key = awayName + "|" + homeName;
+    var hit = null;
+    Object.keys(data.events).forEach(function (id) {
+      var e = data.events[id];
+      if (e.key !== key) return;
+      // same matchup repeats across a series; require same local date
+      if (startIso && e.date && toISODate(new Date(e.date)) !== toISODate(new Date(startIso))) return;
+      hit = e;
+    });
+    return hit;
+  }
+  // last snapshot taken before the game started (the "closing line")
+  function closingSnap(entry, startIso) {
+    var start = new Date(startIso || entry.date).getTime();
+    if (isNaN(start)) return null;
+    var snaps = entry.snaps || [], close = null;
+    for (var i = 0; i < snaps.length; i++) {
+      if (snaps[i].t <= start + 10 * 60000) close = snaps[i];
+    }
+    return close;
+  }
+
+  // ---------- bet log ----------
+  function getBetLog() { try { return JSON.parse(store.get("betlog")) || []; } catch (e) { return []; } }
+  function saveBetLog(arr) { store.set("betlog", JSON.stringify(arr)); }
+
+  function recordBet(game, market, side) {
+    var od = game.odds;
+    if (!od) return null;
+    var price = null, line = null, s;
+    if (market === "ml") { s = side === "away" ? od.mlAway : od.mlHome; price = s && s.cur; }
+    else if (market === "sp") { s = side === "away" ? od.spAway : od.spHome; price = s && s.cur; line = s && s.line; }
+    else if (market === "ou") {
+      s = side === "over" ? od.over : od.under;
+      price = s && s.cur;
+      line = stripOU((s && s.line) || (od.overUnder !== null && od.overUnder !== undefined ? String(od.overUnder) : ""));
+    }
+    if (!price) return null;
+    var pick = {
+      id: "p" + Date.now() + Math.random().toString(36).slice(2, 6),
+      t: Date.now(),
+      gameId: game.id, league: game.league, espnId: game.espnId || null,
+      dateStr: toISODate(state.date), start: game.startTime || null,
+      away: game.away.name, home: game.home.name,
+      market: market, side: side, line: line || null, price: String(price),
+      stake: 1, live: game.status === "live",
+      result: null, close: null, fa: null, fh: null,
+    };
+    var picks = getBetLog();
+    picks.push(pick);
+    saveBetLog(picks);
+    return pick;
+  }
+
+  function gradePick(p, finalAway, finalHome) {
+    var fa = Number(finalAway), fh = Number(finalHome);
+    if (!isFinite(fa) || !isFinite(fh)) return null;
+    var diff;
+    if (p.market === "ml") diff = p.side === "away" ? fa - fh : fh - fa;
+    else if (p.market === "sp") {
+      var line = Number(p.line);
+      if (!isFinite(line)) return null;
+      diff = p.side === "away" ? fa + line - fh : fh + line - fa;
+    } else if (p.market === "ou") {
+      var tot = Number(p.line);
+      if (!isFinite(tot)) return null;
+      diff = p.side === "over" ? fa + fh - tot : tot - (fa + fh);
+    } else return null;
+    if (diff > 0) return "win";
+    if (diff < 0) return "loss";
+    return "push";
+  }
+
+  function pickProfit(p) {
+    if (p.result === "win") {
+      var o = Number(String(p.price).replace(/^\+/, ""));
+      if (isNaN(o) || o === 0) return 0;
+      return o > 0 ? p.stake * o / 100 : p.stake * 100 / (-o);
+    }
+    if (p.result === "loss") return -p.stake;
+    return 0;
+  }
+
+  function closePriceFromSnap(snap, p) {
+    if (!snap) return null;
+    var price = null, line = null;
+    if (p.market === "ml") price = p.side === "away" ? snap.mlA : snap.mlH;
+    else if (p.market === "sp") {
+      price = p.side === "away" ? snap.spAO : snap.spHO;
+      line = p.side === "away" ? snap.spA : snap.spH;
+    } else if (p.market === "ou") {
+      price = p.side === "over" ? snap.oO : snap.uO;
+      line = snap.tot;
+    }
+    return price ? { price: String(price), line: line || null } : null;
+  }
+  function closePriceFromOdds(od, p) {
+    if (!od) return null;
+    var s = null;
+    if (p.market === "ml") s = p.side === "away" ? od.mlAway : od.mlHome;
+    else if (p.market === "sp") s = p.side === "away" ? od.spAway : od.spHome;
+    else if (p.market === "ou") s = p.side === "over" ? od.over : od.under;
+    if (!s || !s.cur) return null;
+    return { price: String(s.cur), line: p.market === "ou" ? (stripOU(s.line) || p.line) : (s.line || null) };
+  }
+
+  // positive = the taken price beat the closing line (in probability points)
+  function clvPts(p) {
+    if (!p.close || !p.close.price) return null;
+    if (p.market !== "ml" && String(p.line) !== String(p.close.line)) return null;
+    var taken = impliedProb(p.price), close = impliedProb(p.close.price);
+    if (taken === null || close === null) return null;
+    return (close - taken) * 100;
+  }
+
+  // grade finished games and fill closing lines, then persist
+  function settleBets() {
+    var picks = getBetLog();
+    var now = Date.now();
+    var jobs = {}, histLeagues = {};
+    picks.forEach(function (p) {
+      var started = p.start && new Date(p.start).getTime() < now;
+      if (!p.result && started && FETCHERS[p.league] && p.dateStr) jobs[p.league + "|" + p.dateStr] = true;
+      if (!p.close && started && (p.league === "mlb" || p.league === "nba")) histLeagues[p.league] = true;
+    });
+    var fetches = Object.keys(jobs).map(function (k) {
+      var parts = k.split("|");
+      return FETCHERS[parts[0]](parts[1]).catch(function () { return []; });
+    });
+    var hists = Object.keys(histLeagues).map(function (lg) {
+      return fetchOddsHistory(lg).then(function (d) { return { lg: lg, data: d }; });
+    });
+    if (!fetches.length && !hists.length) return Promise.resolve(picks);
+    return Promise.all([Promise.all(fetches), Promise.all(hists)]).then(function (res) {
+      var gameMap = {};
+      res[0].forEach(function (games) {
+        games.forEach(function (g) { gameMap[g.id] = g; });
+      });
+      var histMap = {};
+      res[1].forEach(function (r) { histMap[r.lg] = r.data; });
+      var changed = false;
+      picks.forEach(function (p) {
+        var g = gameMap[p.gameId];
+        if (!p.result && g && g.status === "final") {
+          var r = gradePick(p, g.away.score, g.home.score);
+          if (r) { p.result = r; p.fa = g.away.score; p.fh = g.home.score; changed = true; }
+        }
+        if (!p.close) {
+          var entry = findHistEntry(histMap[p.league], p.espnId, p.away, p.home, p.start);
+          var cp = closePriceFromSnap(entry ? closingSnap(entry, p.start) : null, p);
+          if (!cp && g && g.status === "final") cp = closePriceFromOdds(g.odds, p);
+          if (cp) { p.close = cp; changed = true; }
+        }
+      });
+      if (changed) saveBetLog(picks);
+      return picks;
+    });
+  }
+
+  var MARKET_SIDES = {
+    ml: { away: "客勝", home: "主勝" },
+    sp: { away: "讓分(客)", home: "讓分(主)" },
+    ou: { over: "大分", under: "小分" },
+  };
+  function pickLabel(p) {
+    var base = MARKET_SIDES[p.market] ? (MARKET_SIDES[p.market][p.side] || "") : "";
+    if (p.market === "sp" || p.market === "ou") base += " " + (p.line || "");
+    return base;
+  }
+
+  function betStatsHtml(picks) {
+    var w = 0, l = 0, pu = 0, profit = 0, staked = 0;
+    var clvSum = 0, clvN = 0, clvBeat = 0;
+    picks.forEach(function (p) {
+      if (p.result === "win") w++;
+      else if (p.result === "loss") l++;
+      else if (p.result === "push") pu++;
+      if (p.result) { profit += pickProfit(p); staked += Number(p.stake) || 0; }
+      var c = clvPts(p);
+      if (c !== null) { clvSum += c; clvN++; if (c > 0) clvBeat++; }
+    });
+    var roi = staked > 0 ? (profit / staked) * 100 : null;
+    function tile(label, val, cls) {
+      return '<div class="bet-tile' + (cls ? " " + cls : "") + '"><span class="v">' + val + '</span><span class="k">' + label + '</span></div>';
+    }
+    var profCls = profit > 0 ? "pos" : profit < 0 ? "neg" : "";
+    var avgClv = clvN ? clvSum / clvN : null;
+    return '<div class="bet-tiles">' +
+      tile("戰績(勝-負-平)", w + "-" + l + "-" + pu) +
+      tile("淨盈虧(單位)", (profit >= 0 ? "+" : "") + profit.toFixed(2), profCls) +
+      tile("ROI", roi === null ? "-" : roi.toFixed(1) + "%", profCls) +
+      tile("平均 CLV", avgClv === null ? "-" : ((avgClv >= 0 ? "+" : "") + avgClv.toFixed(2) + " pts"),
+        avgClv === null ? "" : avgClv > 0 ? "pos" : avgClv < 0 ? "neg" : "") +
+      tile("贏過收盤線", clvN ? Math.round((clvBeat / clvN) * 100) + "%" : "-") +
+      '</div>';
+  }
+
+  function kellyBoxHtml() {
+    return '<div class="detail-section"><h3>Kelly / EV 計算機</h3>' +
+      '<div class="kelly-row">' +
+      '<label>自估勝率% <input id="kellyProb" type="number" min="1" max="99" step="0.5" value="55"></label>' +
+      '<label>美式賠率 <input id="kellyOdds" type="text" value="-110"></label>' +
+      '<label>資金 <input id="kellyBank" type="number" min="0" value="10000"></label>' +
+      '<button class="text-btn" id="kellyCalcBtn">計算</button>' +
+      '</div><div id="kellyOut" class="kelly-out"></div></div>';
+  }
+  function runKelly() {
+    var out = document.getElementById("kellyOut");
+    if (!out) return;
+    var prob = Number(document.getElementById("kellyProb").value) / 100;
+    var oddsStr = document.getElementById("kellyOdds").value;
+    var bank = Number(document.getElementById("kellyBank").value) || 0;
+    var o = Number(String(oddsStr).replace(/^\+/, ""));
+    if (!(prob > 0 && prob < 1) || isNaN(o) || o === 0) {
+      out.innerHTML = '<span class="neg">請輸入有效的勝率與美式賠率。</span>';
+      return;
+    }
+    var b = o > 0 ? o / 100 : 100 / (-o);
+    var q = 1 - prob;
+    var ev = prob * b - q; // per 1 unit staked
+    var breakeven = impliedProb(oddsStr);
+    if (ev <= 0) {
+      out.innerHTML = '損益兩平勝率 <b>' + pctStr(breakeven) + '</b>,你的估計 <b>' + pctStr(prob) +
+        '</b> → EV <span class="neg">' + (ev * 100).toFixed(1) + '%</span>,無優勢,不建議下注。';
+      return;
+    }
+    var kelly = (b * prob - q) / b;
+    var half = kelly / 2;
+    out.innerHTML = 'EV <span class="pos">+' + (ev * 100).toFixed(1) + '%</span> ・ 損益兩平勝率 ' + pctStr(breakeven) +
+      '<br>全 Kelly <b>' + (kelly * 100).toFixed(1) + '%</b>' + (bank ? '(' + Math.round(bank * kelly) + ')' : '') +
+      ' ・ 半 Kelly <b>' + (half * 100).toFixed(1) + '%</b>' + (bank ? '(<b>' + Math.round(bank * half) + '</b>)' : '') +
+      '<br><span class="detail-note">實務建議使用半 Kelly 以下,並確認勝率估計的穩健性。</span>';
+  }
+
+  function renderBetLogHtml(picks, settling) {
+    var html = '<div class="detail-header"><span class="detail-league">📒 注單紀錄</span>' +
+      (settling ? '<span class="status-pill scheduled">結算中…</span>' : '') + '</div>';
+    html += betStatsHtml(picks);
+    html += kellyBoxHtml();
+    if (!picks.length) {
+      html += '<div class="detail-section"><p class="detail-note">尚無注單。開啟任一場比賽的詳細資料,在賠率區點「記錄注單」即可把當下價位存進來;完賽後自動結算,並對比收盤線計算 CLV。</p></div>';
+      return html;
+    }
+    var rows = "";
+    picks.slice().reverse().forEach(function (p) {
+      var res = p.result === "win" ? '<span class="bet-res win">勝</span>' :
+        p.result === "loss" ? '<span class="bet-res loss">負</span>' :
+        p.result === "push" ? '<span class="bet-res push">平</span>' :
+        '<span class="bet-res pending">未結</span>';
+      var clv = clvPts(p);
+      var clvHtml = clv === null ? "-" :
+        '<span class="' + (clv > 0 ? "pos" : clv < 0 ? "neg" : "") + '">' + (clv >= 0 ? "+" : "") + clv.toFixed(2) + '</span>';
+      var closeHtml = p.close && p.close.price ? esc((p.close.line ? p.close.line + " " : "") + p.close.price) : "-";
+      var score = (p.result && p.fa !== null && p.fa !== undefined) ? (p.fa + ":" + p.fh) : "";
+      rows += '<tr>' +
+        '<td>' + esc(formatDateTime(p.start) || p.dateStr) +
+          '<br><span class="bet-match">' + esc(p.away) + ' @ ' + esc(p.home) + (score ? " (" + esc(score) + ")" : "") + '</span></td>' +
+        '<td>' + esc(pickLabel(p)) + (p.live ? ' <span class="bet-live-tag">滾球</span>' : '') + '</td>' +
+        '<td>' + esc(p.price) + '</td>' +
+        '<td>' + closeHtml + '</td>' +
+        '<td>' + clvHtml + '</td>' +
+        '<td><input class="bet-stake" data-id="' + esc(p.id) + '" type="number" min="0" step="0.5" value="' + (Number(p.stake) || 0) + '"></td>' +
+        '<td>' + res + '</td>' +
+        '<td><button class="bet-del" data-id="' + esc(p.id) + '" title="刪除">✕</button></td>' +
+        '</tr>';
+    });
+    html += '<div class="detail-section"><h3>注單明細</h3>' +
+      '<div class="table-wrap"><table class="stat-table" style="min-width:640px">' +
+      '<tr><th>比賽</th><th>投注</th><th>取得價</th><th>收盤價</th><th>CLV</th><th>注碼</th><th>結果</th><th></th></tr>' +
+      rows + '</table></div>' +
+      '<div class="bet-toolbar"><button class="text-btn" id="betExportBtn">匯出 CSV</button>' +
+      '<button class="text-btn danger" id="betClearBtn">清空全部</button></div>' +
+      '<div class="detail-note">CLV 為「取得價 vs 收盤價」的隱含機率差(百分點),正值代表贏過收盤線;讓分/大小若盤數移動則不計。收盤線來自本站每 20 分鐘的盤口採樣。</div>' +
+      '</div>';
+    return html;
+  }
+
+  function openBetLog() {
+    modal.game = null;
+    modal.betlog = true;
+    if (modal.timer) { clearInterval(modal.timer); modal.timer = null; }
+    var m = document.getElementById("modal");
+    m.classList.remove("hidden");
+    m.setAttribute("aria-hidden", "false");
+    document.body.style.overflow = "hidden";
+    document.getElementById("modalBody").innerHTML = renderBetLogHtml(getBetLog(), true);
+    settleBets().then(function (picks) {
+      if (!modal.betlog) return;
+      document.getElementById("modalBody").innerHTML = renderBetLogHtml(picks, false);
+    });
+  }
+
+  function setBetStake(id, val) {
+    var picks = getBetLog();
+    var p = picks.filter(function (x) { return x.id === id; })[0];
+    if (!p) return;
+    var n = Number(val);
+    p.stake = isFinite(n) && n >= 0 ? n : 1;
+    saveBetLog(picks);
+    var tiles = document.querySelector(".bet-tiles");
+    if (tiles) tiles.outerHTML = betStatsHtml(picks); // keep input focus, refresh stats only
+  }
+  function deleteBet(id) {
+    saveBetLog(getBetLog().filter(function (x) { return x.id !== id; }));
+    if (modal.betlog) document.getElementById("modalBody").innerHTML = renderBetLogHtml(getBetLog(), false);
+  }
+  function clearBets() {
+    if (!window.confirm("確定要清空所有注單紀錄?此動作無法復原。")) return;
+    saveBetLog([]);
+    if (modal.betlog) document.getElementById("modalBody").innerHTML = renderBetLogHtml([], false);
+  }
+  function exportBetsCsv() {
+    var picks = getBetLog();
+    var head = "date,league,away,home,market,side,line,price,stake,result,close_line,close_price,clv_pts";
+    var lines = picks.map(function (p) {
+      var clv = clvPts(p);
+      return [p.start || p.dateStr, p.league, p.away, p.home, p.market, p.side, p.line || "", p.price,
+        p.stake, p.result || "", (p.close && p.close.line) || "", (p.close && p.close.price) || "",
+        clv === null ? "" : clv.toFixed(2)
+      ].map(function (v) {
+        v = String(v);
+        return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+      }).join(",");
+    });
+    var blob = new Blob(["\ufeff" + head + "\n" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "betlog-" + toISODate(new Date()) + ".csv";
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
   }
 
   // ---------- pins ----------
@@ -528,7 +874,8 @@
     var oddsHtml = "";
     if (game.odds && game.status === "scheduled") {
       var sum = oddsSummary(game.odds);
-      if (sum) oddsHtml = '<div class="odds-row">' + sum + '</div>';
+      var badge = oddsMoveBadge(game.odds);
+      if (sum || badge) oddsHtml = '<div class="odds-row">' + sum + badge + '</div>';
     }
 
     return (
@@ -718,9 +1065,14 @@
         html += sectionBlock("賠率" + (od.provider ? "(" + od.provider + ")" : ""),
           '<div class="table-wrap"><table class="stat-table" style="min-width:320px">' +
           '<tr><th>市場</th><th>開盤</th><th>目前</th></tr>' + rows + '</table></div>' +
+          betButtonsHtml(game) +
+          espnMoveNote(od, game) +
           '<div class="detail-note">美式賠率,僅供參考。</div>');
       }
     }
+
+    // filled asynchronously from data/odds/<league>.json (see hydrateOddsHistory)
+    html += '<div class="detail-section odds-hist-slot" id="oddsHistSlot" style="display:none"></div>';
 
     var log = getOddsLog(game.id);
     if (log.length > 1) {
@@ -731,6 +1083,175 @@
         '<div class="detail-note">僅記錄本瀏覽器開啟頁面期間觀測到的變化。</div>');
     }
     return html;
+  }
+
+  function betButtonsHtml(game) {
+    var od = game.odds;
+    if (!od || game.status === "final" || game.status === "postponed") return "";
+    var btns = "";
+    function b(market, side, label) {
+      btns += '<button class="bet-rec" data-market="' + market + '" data-side="' + side + '">' + esc(label) + '</button>';
+    }
+    if (od.mlAway && od.mlAway.cur) b("ml", "away", "客勝 " + od.mlAway.cur);
+    if (od.mlHome && od.mlHome.cur) b("ml", "home", "主勝 " + od.mlHome.cur);
+    if (od.spAway && od.spAway.cur) b("sp", "away", "客 " + (od.spAway.line || "") + " " + od.spAway.cur);
+    if (od.spHome && od.spHome.cur) b("sp", "home", "主 " + (od.spHome.line || "") + " " + od.spHome.cur);
+    if (od.over && od.over.cur) b("ou", "over", "大 " + stripOU(od.over.line) + " " + od.over.cur);
+    if (od.under && od.under.cur) b("ou", "under", "小 " + stripOU(od.under.line) + " " + od.under.cur);
+    if (!btns) return "";
+    return '<div class="bet-actions"><span class="bet-actions-label">記錄注單:</span>' + btns + '</div>';
+  }
+
+  // ---------- line movement analysis (which side the market is warming to) ----------
+  // vig-free home win probability implied by a snapshot's moneyline
+  function snapFairHome(s) {
+    if (!s || !s.mlA || !s.mlH) return null;
+    var a = impliedProb(s.mlA), h = impliedProb(s.mlH);
+    if (a === null || h === null || a + h === 0) return null;
+    return h / (a + h);
+  }
+
+  function moveVerdictHtml(votesHome, votesAway, game) {
+    if (votesHome === votesAway) {
+      return '<div class="move-verdict flat">⚖️ 市場動向:雙方評價變化不大或方向分歧,暫無明顯傾斜。</div>';
+    }
+    var homeFav = votesHome > votesAway;
+    var name = homeFav ? game.home.name : game.away.name;
+    return '<div class="move-verdict ' + (homeFav ? "home" : "away") + '">📈 市場動向:<b>' +
+      esc(name) + (homeFav ? "(主)" : "(客)") + '</b> 越來越被看好。</div>';
+  }
+
+  function lineMoveAnalysis(entry, game) {
+    var snaps = entry.snaps || [];
+    if (snaps.length < 2) return "";
+    var first = snaps[0], last = snaps[snaps.length - 1];
+    var votesHome = 0, votesAway = 0;
+    var msgs = [];
+
+    // moneyline: shift in vig-free implied probability
+    var f = snapFairHome(first), l = snapFairHome(last);
+    if (f !== null && l !== null) {
+      var d = (l - f) * 100;
+      if (Math.abs(d) >= 1) {
+        if (d > 0) votesHome++; else votesAway++;
+        var side = d > 0 ? game.home.name + "(主)" : game.away.name + "(客)";
+        msgs.push("勝負盤:主隊市場中性機率由 " + pctStr(f) + " 移至 <b>" + pctStr(l) + "</b>(" +
+          (d >= 0 ? "+" : "") + d.toFixed(1) + " 百分點),資金流向 <b>" + esc(side) + "</b>。");
+      } else {
+        msgs.push("勝負盤:隱含機率自開盤僅變動 " + (d >= 0 ? "+" : "") + d.toFixed(1) + " 百分點,市場對勝負的評價大致持平。");
+      }
+    }
+
+    // spread depth: spA is the away line; more negative = away asked to give more points
+    var sf = Number(first.spA), sl = Number(last.spA);
+    if (isFinite(sf) && isFinite(sl) && sf !== sl) {
+      var towardAway = sl < sf;
+      if (towardAway) votesAway++; else votesHome++;
+      msgs.push("讓分盤:客隊盤口由 " + esc(String(first.spA)) + " 移至 <b>" + esc(String(last.spA)) + "</b>," +
+        (towardAway
+          ? "客隊被要求讓出更多分數,市場對<b>" + esc(game.away.name) + "(客)</b>的信心增強"
+          : "盤口向主隊方向移動,市場對<b>" + esc(game.home.name) + "(主)</b>的評價上升") + "。");
+    }
+
+    // total: market's expectation of combined scoring
+    var tf = Number(first.tot), tl = Number(last.tot);
+    if (isFinite(tf) && isFinite(tl) && tf !== tl) {
+      msgs.push("大小盤:總分線由 " + esc(String(first.tot)) + " 調整至 <b>" + esc(String(last.tot)) + "</b>," +
+        (tl > tf ? "市場預期總得分上修,大分方向獲得資金支持" : "市場預期總得分下修,小分方向獲得資金支持") + "。");
+    }
+
+    // late window: compare the last ~6h against the overall move to flag steam / reversal
+    var cutoff = last.t - 6 * 3600000;
+    var recentFirst = null;
+    for (var i = 0; i < snaps.length - 1; i++) {
+      if (snaps[i].t >= cutoff) { recentFirst = snaps[i]; break; }
+    }
+    if (recentFirst && f !== null && l !== null) {
+      var rf = snapFairHome(recentFirst);
+      if (rf !== null) {
+        var rd = (l - rf) * 100, od = (l - f) * 100;
+        if (Math.abs(rd) >= 1.5) {
+          var recentSide = rd > 0 ? game.home.name + "(主)" : game.away.name + "(客)";
+          var sameDir = (rd > 0) === (od > 0) && Math.abs(od) >= 1;
+          msgs.push("近 6 小時:<b>" + esc(recentSide) + "</b> 隱含機率再升 " + Math.abs(rd).toFixed(1) + " 個百分點," +
+            (sameDir ? "與整體走勢同向,盤口持續傾斜,注意臨場 steam move" : "與早盤方向相反,可能有消息面(先發/傷兵)引發市場反轉") + "。");
+        }
+      }
+    }
+
+    if (!msgs.length) return "";
+    return moveVerdictHtml(votesHome, votesAway, game) +
+      '<div class="analysis-box" style="margin-bottom:10px">' +
+      msgs.map(function (m) { return "<p>" + m + "</p>"; }).join("") + '</div>';
+  }
+
+  // same idea but from ESPN's own open vs. current prices (works without our sampling)
+  function espnMoveNote(od, game) {
+    if (!od || !od.mlAway || !od.mlHome) return "";
+    var oa = impliedProb(od.mlAway.open), oh = impliedProb(od.mlHome.open);
+    var ca = impliedProb(od.mlAway.cur), ch = impliedProb(od.mlHome.cur);
+    if (oa === null || oh === null || ca === null || ch === null) return "";
+    if (oa + oh === 0 || ca + ch === 0) return "";
+    var f0 = oh / (oa + oh), f1 = ch / (ca + ch);
+    var d = (f1 - f0) * 100;
+    if (Math.abs(d) < 1) return "";
+    var side = d > 0 ? game.home.name + "(主)" : game.away.name + "(客)";
+    return '<div class="detail-note">開盤至今,<b>' + esc(side) + '</b> 的市場中性勝率由 ' +
+      pctStr(f0) + ' 升至 ' + pctStr(f1) + ',為市場資金較看好的一方。</div>';
+  }
+
+  // card badge: which side has gained implied probability since open
+  function oddsMoveBadge(od) {
+    if (!od || !od.mlAway || !od.mlHome) return "";
+    var oa = impliedProb(od.mlAway.open), oh = impliedProb(od.mlHome.open);
+    var ca = impliedProb(od.mlAway.cur), ch = impliedProb(od.mlHome.cur);
+    if (oa === null || oh === null || ca === null || ch === null) return "";
+    if (oa + oh === 0 || ca + ch === 0) return "";
+    var d = (ch / (ca + ch) - oh / (oa + oh)) * 100;
+    if (Math.abs(d) < 1.5) return "";
+    return '<span class="move-badge ' + (d > 0 ? "home" : "away") + '" title="開盤至今勝負盤隱含機率變化,箭頭指向市場趨熱的一方">' +
+      (d > 0 ? "📈主" : "📈客") + " +" + Math.abs(d).toFixed(1) + '</span>';
+  }
+
+  function histTableHtml(entry, startIso) {
+    var snaps = entry.snaps || [];
+    if (!snaps.length) return "";
+    var close = closingSnap(entry, startIso);
+    var shown = snaps.slice(-24);
+    var rows = "";
+    for (var i = shown.length - 1; i >= 0; i--) {
+      var s = shown[i], prev = i > 0 ? shown[i - 1] : null;
+      var mark = function (field) {
+        var v = s[field] === undefined || s[field] === null ? "-" : String(s[field]);
+        var changed = prev && String(prev[field] === undefined ? "" : prev[field]) !== String(s[field] === undefined ? "" : s[field]);
+        return changed ? "<b>" + esc(v) + "</b>" : esc(v);
+      };
+      rows += '<tr' + (close && s.t === close.t ? ' class="close-row"' : '') + '>' +
+        '<td>' + esc(formatDateTime(new Date(s.t).toISOString())) +
+          (close && s.t === close.t ? ' <span class="close-tag">收盤</span>' : '') + '</td>' +
+        '<td>' + mark("mlA") + ' / ' + mark("mlH") + '</td>' +
+        '<td>' + mark("spA") + ' (' + mark("spAO") + ')</td>' +
+        '<td>' + mark("tot") + ' (' + mark("oO") + '/' + mark("uO") + ')</td>' +
+        '</tr>';
+    }
+    return '<div class="table-wrap"><table class="stat-table" style="min-width:460px">' +
+      '<tr><th>時間</th><th>勝負(客/主)</th><th>讓分(客)</th><th>大小(O/U)</th></tr>' + rows + '</table></div>' +
+      '<div class="detail-note">由本站排程每 20 分鐘採樣 ESPN 盤口,僅在數字變動時記錄。</div>';
+  }
+
+  function hydrateOddsHistory(game) {
+    if (game.league !== "mlb" && game.league !== "nba") return;
+    fetchOddsHistory(game.league).then(function (data) {
+      if (modal.game !== game) return; // modal switched or closed meanwhile
+      var slot = document.getElementById("oddsHistSlot");
+      if (!slot) return;
+      var entry = data && findHistEntry(data, game.espnId, game.away.name, game.home.name, game.startTime);
+      if (!entry || !(entry.snaps || []).length) return;
+      slot.style.display = "";
+      slot.innerHTML = "<h3>盤口走勢與市場動向</h3>" +
+        lineMoveAnalysis(entry, game) +
+        histTableHtml(entry, game.startTime);
+    });
   }
 
   // ---------- MLB team form (standings) ----------
@@ -1424,7 +1945,9 @@
 
   function loadDetail(game) {
     var body = document.getElementById("modalBody");
-    return DETAIL_RENDERERS[game.league](game, body).catch(function (err) {
+    return DETAIL_RENDERERS[game.league](game, body).then(function () {
+      hydrateOddsHistory(game);
+    }).catch(function (err) {
       body.innerHTML = detailHeaderHtml(game, null, null) +
         '<div class="error-state">詳細資料載入失敗:' + esc(err.message || err) +
         '<br><button onclick="window.__scoreApp.reloadDetail()">重試</button></div>';
@@ -1433,6 +1956,7 @@
 
   function openDetail(game) {
     modal.game = game;
+    modal.betlog = false;
     var m = document.getElementById("modal");
     m.classList.remove("hidden");
     m.setAttribute("aria-hidden", "false");
@@ -1452,6 +1976,7 @@
 
   function closeDetail() {
     modal.game = null;
+    modal.betlog = false;
     if (modal.timer) { clearInterval(modal.timer); modal.timer = null; }
     var m = document.getElementById("modal");
     m.classList.add("hidden");
@@ -1574,6 +2099,30 @@
     });
     document.getElementById("modalClose").addEventListener("click", closeDetail);
     document.getElementById("modalBackdrop").addEventListener("click", closeDetail);
+
+    // bet log: header button + delegated actions inside the modal
+    document.getElementById("betlogBtn").addEventListener("click", openBetLog);
+    document.getElementById("modalBody").addEventListener("click", function (e) {
+      var rec = e.target.closest(".bet-rec");
+      if (rec && modal.game) {
+        var pick = recordBet(modal.game, rec.dataset.market, rec.dataset.side);
+        if (pick) {
+          rec.classList.add("done");
+          rec.disabled = true;
+          rec.textContent = "✓ 已記錄";
+        }
+        return;
+      }
+      var del = e.target.closest(".bet-del");
+      if (del) { deleteBet(del.dataset.id); return; }
+      if (e.target.id === "kellyCalcBtn") { runKelly(); return; }
+      if (e.target.id === "betExportBtn") { exportBetsCsv(); return; }
+      if (e.target.id === "betClearBtn") { clearBets(); return; }
+    });
+    document.getElementById("modalBody").addEventListener("change", function (e) {
+      var inp = e.target.closest(".bet-stake");
+      if (inp) setBetStake(inp.dataset.id, inp.value);
+    });
     document.addEventListener("keydown", function (e) {
       if (e.key === "Escape" && modal.game) closeDetail();
     });

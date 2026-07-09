@@ -3,23 +3,29 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>即時比分中心 | MLB・NBA・日職・韓職</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🏆</text></svg>">
-<link rel="stylesheet" href="assets/css/style.css?v=4">
+<!-- 私人站台:不允許任何搜尋引擎索引、跟隨或快取,僅供知道網址者使用 -->
+<meta name="robots" content="noindex, nofollow, noarchive, nosnippet, noimageindex">
+<meta name="googlebot" content="noindex, nofollow, noarchive, nosnippet, noimageindex">
+<meta name="referrer" content="no-referrer">
+<title>盤口數據分析站 | 賭球情報・盤口走勢・CLV</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📈</text></svg>">
+<link rel="stylesheet" href="assets/css/style.css?v=6">
 </head>
 <body>
 
 <header class="site-header">
   <div class="header-inner">
     <div class="brand">
-      <span class="brand-icon">🏆</span>
+      <span class="brand-icon">📈</span>
       <div class="brand-text">
-        <h1>即時比分中心</h1>
-        <p class="subtitle">MLB・NBA・日本職棒・韓國職棒</p>
+        <h1>盤口數據分析站</h1>
+        <p class="subtitle">MLB・NBA・日職・韓職|賠率、盤口動向與賭球數據</p>
       </div>
     </div>
     <div class="header-actions">
       <span class="updated-at" id="updatedAt">尚未更新</span>
+      <a class="icon-btn nav-link" href="picks.html" title="今日推薦 TOP 5" aria-label="今日推薦 TOP 5">🎯</a>
+      <button class="icon-btn" id="betlogBtn" title="注單紀錄與 CLV 分析" aria-label="注單紀錄與 CLV 分析">📒</button>
       <button class="icon-btn" id="refreshBtn" title="立即重新整理" aria-label="立即重新整理">⟳</button>
       <button class="icon-btn" id="notifBtn" title="比分變動桌面通知" aria-label="比分變動桌面通知">🔕</button>
       <button class="icon-btn" id="themeBtn" title="切換深淺色" aria-label="切換深淺色">🌙</button>
@@ -53,8 +59,8 @@
 </main>
 
 <footer class="site-footer">
-  <p>資料來源:MLB Stats API、ESPN、TheSportsDB(公開接口,僅供參考,實際請以官方轉播為準)</p>
-  <p>賠率資訊由 ESPN 合作數據供應商提供,僅供參考;賠率異動紀錄僅為本瀏覽器開啟期間之觀測,不構成任何建議。</p>
+  <p>資料來源:MLB Stats API、ESPN、TheSportsDB。賠率為 ESPN 合作數據供應商提供之美式盤,盤口走勢為本站每 20 分鐘自動採樣。</p>
+  <p>本站為賭球數據分析工具,提供隱含機率、盤口動向、市場資金流向、CLV 與 Kelly 資金管理等資訊,僅供研究參考,不構成投注建議。注單紀錄僅儲存於你的瀏覽器。請遵守所在地法規、理性投注,未滿 18 歲請勿使用。</p>
 </footer>
 
 <div id="modal" class="modal hidden" aria-hidden="true">
@@ -65,6 +71,6 @@
   </div>
 </div>
 
-<script src="assets/js/app.js?v=4"></script>
+<script src="assets/js/app.js?v=6"></script>
 </body>
 </html>

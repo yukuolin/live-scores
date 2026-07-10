@@ -9,9 +9,48 @@
 <meta name="referrer" content="no-referrer">
 <title>盤口數據分析站 | 賭球情報・盤口走勢・CLV</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📈</text></svg>">
-<link rel="stylesheet" href="assets/css/style.css?v=8">
+<link rel="stylesheet" href="assets/css/style.css?v=9">
 </head>
 <body>
+
+<!-- 假登入閘門:僅為入口儀式,非真正的存取控制 -->
+<div id="loginGate" class="login-gate">
+  <div class="login-card">
+    <div class="login-icon">🔒</div>
+    <h2>會員登入</h2>
+    <p>本站為私人數據分析站,請輸入密碼進入。</p>
+    <form id="loginForm" class="login-form">
+      <input type="password" id="loginPw" placeholder="密碼" autocomplete="off" autofocus>
+      <button type="submit">進入</button>
+    </form>
+    <p class="login-err" id="loginErr" hidden>密碼錯誤,請再試一次。</p>
+  </div>
+</div>
+<script>
+(function () {
+  var KEY = "gateOk";
+  var gate = document.getElementById("loginGate");
+  function unlock() {
+    gate.hidden = true;
+    document.documentElement.classList.remove("gate-locked");
+  }
+  var ok = false;
+  try { ok = sessionStorage.getItem(KEY) === "1"; } catch (e) {}
+  if (ok) { unlock(); return; }
+  document.documentElement.classList.add("gate-locked");
+  document.getElementById("loginForm").addEventListener("submit", function (e) {
+    e.preventDefault();
+    if (document.getElementById("loginPw").value === "0") {
+      try { sessionStorage.setItem(KEY, "1"); } catch (err) {}
+      unlock();
+    } else {
+      document.getElementById("loginErr").hidden = false;
+      document.getElementById("loginPw").value = "";
+      document.getElementById("loginPw").focus();
+    }
+  });
+})();
+</script>
 
 <header class="site-header">
   <div class="header-inner">
@@ -71,6 +110,6 @@
   </div>
 </div>
 
-<script src="assets/js/app.js?v=7"></script>
+<script src="assets/js/app.js?v=8"></script>
 </body>
 </html>

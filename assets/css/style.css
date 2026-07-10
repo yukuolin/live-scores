@@ -637,6 +637,46 @@ body {
 .move-verdict.home { border-color: rgba(52, 192, 124, 0.45); }
 .move-verdict.away { border-color: rgba(224, 118, 44, 0.45); }
 
+/* ---------- fake login gate ---------- */
+.login-gate {
+  position: fixed; inset: 0; z-index: 1000;
+  background: var(--bg);
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px;
+}
+.login-gate[hidden] { display: none; }
+html.gate-locked { overflow: hidden; }
+.login-card {
+  width: 100%; max-width: 360px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 30px 24px;
+  text-align: center;
+}
+.login-icon { font-size: 36px; margin-bottom: 10px; }
+.login-card h2 { margin: 0 0 6px; font-size: 18px; color: var(--text); }
+.login-card p { margin: 0 0 18px; font-size: 13px; color: var(--text-dim); }
+.login-form { display: flex; gap: 8px; }
+.login-form input {
+  flex: 1; min-width: 0;
+  padding: 10px 12px;
+  font-size: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-card);
+  color: var(--text);
+}
+.login-form input:focus { outline: none; border-color: var(--accent); }
+.login-form button {
+  padding: 10px 18px;
+  font-size: 14px; font-weight: 700;
+  border: none; border-radius: 8px;
+  background: var(--accent); color: #fff;
+  cursor: pointer;
+}
+.login-err { color: #ef4444 !important; margin: 12px 0 0 !important; font-size: 12px !important; }
+
 /* ---------- picks page ---------- */
 a.icon-btn.nav-link { text-decoration: none; }
 

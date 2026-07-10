@@ -58,6 +58,19 @@
     if (isSameDay(d, tom)) return "明天";
     return (d.getMonth() + 1) + "/" + d.getDate();
   }
+  // MLB/NBA schedules key on the US Eastern date, which lags Taiwan by 12-13h:
+  // through a Taiwan morning the active US slate is still "yesterday" locally.
+  // Map the selected view date to the same offset from *Eastern* today.
+  function usDateStrFor(d) {
+    var iso = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" })
+      .format(new Date()).split("-");
+    var base = new Date(Number(iso[0]), Number(iso[1]) - 1, Number(iso[2]));
+    var now = new Date();
+    var localToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    var viewDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    base.setDate(base.getDate() + Math.round((viewDay - localToday) / 86400000));
+    return toISODate(base);
+  }
   function formatTime(iso) {
     if (!iso) return "";
     var d = new Date(iso);
@@ -732,7 +745,8 @@
 
   // ---------- load ----------
   function loadLeague(key) {
-    var dateStr = toISODate(state.date);
+    // US leagues follow the Eastern game day; NPB/KBO follow the local (Asia) date
+    var dateStr = (key === "mlb" || key === "nba") ? usDateStrFor(state.date) : toISODate(state.date);
     var prev = {};
     state.gamesByLeague[key].forEach(function (g) { prev[g.id] = g; });
 

@@ -66,6 +66,93 @@
     return (kelly / 2 * 100).toFixed(1) + "%";
   }
 
+  // ---------- playsport.cc fallback moneyline (台灣運彩盤) ----------
+  // The guess page embeds "var vueData = {...}" with every listed game's
+  // markets; gametype with isMoneyLine=true is the 獨贏 pair (option 1 = 主,
+  // 2 = 客, decimal odds). The page only lists the current Taiwan day and has
+  // no CORS headers, so it is fetched through a public proxy and each match
+  // is verified against the MLB game's start time before being used.
+  // public CORS proxies are individually flaky — try them in order
+  var PS_PROXIES = [
+    function (u) { return "https://api.allorigins.win/raw?url=" + encodeURIComponent(u); },
+    function (u) { return "https://corsproxy.io/?url=" + encodeURIComponent(u); },
+    function (u) { return "https://api.codetabs.com/v1/proxy?quest=" + encodeURIComponent(u); },
+  ];
+  var PS_TEAM = {
+    "響尾蛇": "Arizona Diamondbacks", "勇士": "Atlanta Braves", "金鶯": "Baltimore Orioles",
+    "紅襪": "Boston Red Sox", "小熊": "Chicago Cubs", "白襪": "Chicago White Sox",
+    "紅人": "Cincinnati Reds", "守護者": "Cleveland Guardians", "落磯": "Colorado Rockies",
+    "洛磯": "Colorado Rockies", "老虎": "Detroit Tigers", "太空人": "Houston Astros",
+    "皇家": "Kansas City Royals", "天使": "Los Angeles Angels", "道奇": "Los Angeles Dodgers",
+    "馬林魚": "Miami Marlins", "釀酒人": "Milwaukee Brewers", "雙城": "Minnesota Twins",
+    "大都會": "New York Mets", "洋基": "New York Yankees", "運動家": "Athletics",
+    "費城人": "Philadelphia Phillies", "海盜": "Pittsburgh Pirates", "教士": "San Diego Padres",
+    "巨人": "San Francisco Giants", "水手": "Seattle Mariners", "紅雀": "St. Louis Cardinals",
+    "光芒": "Tampa Bay Rays", "遊騎兵": "Texas Rangers", "藍鳥": "Toronto Blue Jays",
+    "國民": "Washington Nationals",
+  };
+
+  function fetchText(url) {
+    var ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+    var timer = ctrl ? setTimeout(function () { ctrl.abort(); }, 20000) : null;
+    return fetch(url, ctrl ? { signal: ctrl.signal } : undefined)
+      .then(function (res) {
+        if (!res.ok) throw new Error("API " + res.status);
+        return res.text();
+      })
+      .finally(function () { if (timer) clearTimeout(timer); });
+  }
+
+  function decToAmerican(dec) {
+    dec = Number(dec);
+    if (!isFinite(dec) || dec <= 1) return null;
+    return dec >= 2 ? "+" + Math.round((dec - 1) * 100) : String(-Math.round(100 / (dec - 1)));
+  }
+
+  function fetchPlaysportHtml(idx) {
+    if (idx >= PS_PROXIES.length) return Promise.reject(new Error("all proxies failed"));
+    return fetchText(PS_PROXIES[idx]("https://www.playsport.cc/guess?allianceid=1"))
+      .then(function (html) {
+        if (html.indexOf("var vueData = {") === -1) throw new Error("no vueData");
+        return html;
+      })
+      .catch(function () { return fetchPlaysportHtml(idx + 1); });
+  }
+
+  function fetchPlaysportMlMap() {
+    return fetchPlaysportHtml(0)
+      .then(function (html) {
+        var m = html.match(/var vueData = (\{.+?\});(?:\r?\n)/);
+        if (!m) return {};
+        var data = JSON.parse(m[1]);
+        var map = {};
+        var lists = data.betGamesList || {};
+        Object.keys(lists).forEach(function (day) {
+          (lists[day] || []).forEach(function (g) {
+            var awayEn = PS_TEAM[g.awayShortName], homeEn = PS_TEAM[g.homeShortName];
+            if (!awayEn || !homeEn || Number(g.isClosed)) return;
+            var mlPair = null;
+            Object.keys(g.gametypes || {}).forEach(function (k) {
+              var gt = g.gametypes[k];
+              if (gt && gt["1"] && gt["1"].isMoneyLine && gt["2"]) mlPair = gt;
+            });
+            if (!mlPair) return;
+            var h = decToAmerican(mlPair["1"].odds); // playsport 主
+            var a = decToAmerican(mlPair["2"].odds); // playsport 客
+            if (!a || !h) return;
+            map[awayEn + "|" + homeEn] = {
+              a: { open: null, cur: a },
+              h: { open: null, cur: h },
+              src: "playsport",
+              ts: Number(g.timestamp) * 1000 || null,
+            };
+          });
+        });
+        return map;
+      })
+      .catch(function () { return {}; });
+  }
+
   // ---------- ESPN moneyline map (open + current) ----------
   function extractMl(oddsArr) {
     if (!oddsArr || !oddsArr.length) return null;
@@ -490,15 +577,21 @@
     return clampNum(m, 0.05, 0.95);
   }
 
+  // MLB/NBA schedule dates follow the US Eastern game day, which lags Taiwan
+  // by 12-13h — using the local date would fetch tomorrow's slate all morning
+  function usTodayISO() {
+    return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
+  }
+
   function collectMlb() {
-    var today = toISODate(new Date());
-    var season = new Date().getFullYear();
+    var today = usTodayISO();
+    var season = Number(today.slice(0, 4));
     var schedP = fetchJson("https://statsapi.mlb.com/api/v1/schedule?sportId=1&date=" + today + "&hydrate=probablePitcher,team");
     var espnP = fetchJson("https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard?dates=" + today.replace(/-/g, ""))
       .then(buildEspnMlMap).catch(function () { return {}; });
 
-    return Promise.all([schedP, fetchMlbStandings(season), espnP, fetchFirstInningRates()]).then(function (res) {
-      var sched = res[0], standings = res[1], mlMap = res[2], fiRates = res[3];
+    return Promise.all([schedP, fetchMlbStandings(season), espnP, fetchFirstInningRates(), fetchPlaysportMlMap()]).then(function (res) {
+      var sched = res[0], standings = res[1], mlMap = res[2], fiRates = res[3], psMap = res[4];
       var games = [];
       (sched.dates || []).forEach(function (d) { games = games.concat(d.games || []); });
       games = games.filter(function (g) {
@@ -541,6 +634,13 @@
 
           // -- moneyline (獨贏) --
           var ml = mlMap[away.name + "|" + home.name];
+          if (!ml) {
+            // ESPN not posted yet: fall back to playsport (台灣運彩), but only
+            // when its listed game start matches this game (it lists the
+            // current Taiwan day only, which can be yesterday's US slate)
+            var ps = psMap[away.name + "|" + home.name];
+            if (ps && (!ps.ts || Math.abs(ps.ts - new Date(g.gameDate).getTime()) < 6 * 3600 * 1000)) ml = ps;
+          }
           var fair = ml ? fairProbs(ml.a.cur, ml.h.cur) : null;
           var modelH = mlbModelHome(aRec, hRec, Number(aSt.era), Number(hSt.era));
           if (modelH !== null) {
@@ -552,7 +652,8 @@
               edge = pickHome ? edgeH : edgeA;
               prob = pickHome ? modelH : 1 - modelH;
               market = pickHome ? fair.home : fair.away;
-              price = String(pickHome ? ml.h.cur : ml.a.cur);
+              price = String(pickHome ? ml.h.cur : ml.a.cur) +
+                (ml.src === "playsport" ? "(運彩換算)" : "");
             } else {
               // odds not posted yet: still surface the model favourite's win prob
               pickHome = modelH >= 0.5;
@@ -574,6 +675,9 @@
             if (fair) {
               reasons.push("模型獨贏勝率 <b>" + pctStr(prob) + "</b> vs 市場中性機率 " +
                 pctStr(market) + ",優勢 " + edgeStr + "。");
+              if (ml.src === "playsport") {
+                reasons.push("賠率來源:ESPN 尚未開盤,取玩運彩(台灣運彩)獨贏賠率換算為美式水位並去除抽水。");
+              }
               var mv = mlMoveNote(ml, pickHome, away.name, home.name);
               if (mv) reasons.push(mv);
             } else {
@@ -665,7 +769,7 @@
 
   // ---------- NBA data (edge = ESPN predictor vs. market) ----------
   function collectNba() {
-    var ymd = toISODate(new Date()).replace(/-/g, "");
+    var ymd = usTodayISO().replace(/-/g, "");
     return fetchJson("https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=" + ymd)
       .then(function (data) {
         var pend = (data.events || []).filter(function (ev) {

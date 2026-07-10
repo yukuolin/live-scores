@@ -304,14 +304,19 @@
                 "%),客隊首局失分 " + aFi.def + " 次(" + Math.round(aFi.defRate * 100) + "%)。",
             ];
             // starters with extreme first-inning ERA nudge the estimate
+            // (needs >= 8 first innings pitched, or the split ERA is too noisy)
             [[ppA, "客"], [ppH, "主"]].forEach(function (pair) {
               var pp = pair[0];
               var st = pp ? fiByPitcher[pp.id] : null;
               if (!pp || !st || !st.era) return;
-              var era = Number(st.era);
+              var era = Number(st.era), ip = Number(st.inningsPitched);
               if (!isFinite(era)) return;
-              if (era <= 2.0) { nrfi += 0.03; reasons2.push(pair[1] + "隊先發 " + esc(pp.fullName) + " 首局 ERA 僅 " + esc(st.era) + ",開局壓制力強(NRFI +3%)。"); }
-              else if (era >= 6.0) { nrfi -= 0.03; reasons2.push(pair[1] + "隊先發 " + esc(pp.fullName) + " 首局 ERA 高達 " + esc(st.era) + ",開局明顯不穩(NRFI −3%)。"); }
+              if (!isFinite(ip) || ip < 8) {
+                reasons2.push(pair[1] + "隊先發 " + esc(pp.fullName) + " 首局 ERA " + esc(st.era) + "(僅 " + esc(st.inningsPitched || "-") + " 局,樣本不足不列入調整)。");
+                return;
+              }
+              if (era <= 2.0) { nrfi += 0.03; reasons2.push(pair[1] + "隊先發 " + esc(pp.fullName) + " 首局 ERA 僅 " + esc(st.era) + "(" + esc(st.inningsPitched) + " 局),開局壓制力強(NRFI +3%)。"); }
+              else if (era >= 6.0) { nrfi -= 0.03; reasons2.push(pair[1] + "隊先發 " + esc(pp.fullName) + " 首局 ERA 高達 " + esc(st.era) + "(" + esc(st.inningsPitched) + " 局),開局明顯不穩(NRFI −3%)。"); }
               else reasons2.push(pair[1] + "隊先發 " + esc(pp.fullName) + " 首局 ERA " + esc(st.era) + "。");
             });
             nrfi = clampNum(nrfi, 0.05, 0.95);

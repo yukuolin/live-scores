@@ -1423,8 +1423,9 @@
     if (!teamId) return Promise.resolve(null);
     var hit = fiCache[teamId];
     if (hit && Date.now() - hit.t < 600000) return Promise.resolve(hit.v);
+    // same sampling window as picks.js: last 25 days, up to 15 games, need >= 8
     var end = new Date(); end.setDate(end.getDate() - 1);
-    var start = new Date(); start.setDate(start.getDate() - 30);
+    var start = new Date(); start.setDate(start.getDate() - 25);
     var url = "https://statsapi.mlb.com/api/v1/schedule?sportId=1&teamId=" + teamId +
       "&startDate=" + toISODate(start) + "&endDate=" + toISODate(end) + "&hydrate=linescore";
     return fetchJson(url).then(function (data) {
@@ -1434,7 +1435,7 @@
         return g.status && g.status.abstractGameState === "Final" &&
           g.linescore && g.linescore.innings && g.linescore.innings[0];
       }).slice(-15);
-      if (!games.length) return null;
+      if (games.length < 8) return null;
       var off = 0, def = 0;
       games.forEach(function (g) {
         var isAway = g.teams.away.team.id === teamId;
@@ -1605,6 +1606,18 @@
         } else if (awayFi) { pA = awayFi.offRate; pH = awayFi.defRate; }
         else { pA = homeFi.defRate; pH = homeFi.offRate; }
         var nrfi = (1 - pA) * (1 - pH) * 100;
+        // starters with extreme first-inning ERA nudge the estimate — same
+        // rule as picks.js (needs >= 8 first innings pitched, else too noisy)
+        var p1Adj = {};
+        [[pp.away, awayP1], [pp.home, homeP1]].forEach(function (pair) {
+          var p = pair[0], st = pair[1];
+          if (!p || !st || !st.era) return;
+          var era = Number(st.era), ip = Number(st.inningsPitched);
+          if (!isFinite(era) || !isFinite(ip) || ip < 8) return;
+          if (era <= 2.0) { nrfi += 3; p1Adj[p.id] = "+3%"; }
+          else if (era >= 6.0) { nrfi -= 3; p1Adj[p.id] = "−3%"; }
+        });
+        nrfi = clampNum(nrfi, 5, 95);
         nrfiProb = nrfi / 100;
         inner += probBarHtml("YRFI 首局有得分", "NRFI 首局無得分", 100 - nrfi, nrfi);
 
@@ -1635,6 +1648,8 @@
             else if (diff < -0.75) line += ",低於其球季 ERA " + esc(seasonSt.era) + ",開局表現穩健";
             else line += ",與其球季 ERA " + esc(seasonSt.era) + " 相近";
           }
+          if (p1Adj[p.id]) line += "(已計入 NRFI " + p1Adj[p.id] + " 調整)";
+          else if (!isNaN(fEra) && (fEra <= 2.0 || fEra >= 6.0)) line += "(首局樣本不足 8 局,不列入機率調整)";
           fiNotes.push("<p>" + line + "。</p>");
         }
         p1Note(pp.away, awayP1);

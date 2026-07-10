@@ -718,3 +718,42 @@ a.icon-btn.nav-link { text-decoration: none; }
   color: var(--text-dim);
 }
 .pick-reasons b { color: var(--text); }
+
+/* NRFI 15-item checklist */
+.pick-checklist { margin-top: 12px; }
+.pick-checklist summary {
+  cursor: pointer;
+  font-size: 12px; font-weight: 700;
+  color: var(--text-dim);
+}
+.pick-checklist summary b { color: var(--text); }
+.cl-gate-tag { color: #ef4444; }
+.cl-wrap { margin-top: 8px; }
+.cl-table {
+  width: 100%; min-width: 520px;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.cl-table th, .cl-table td {
+  text-align: left; vertical-align: top;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.cl-table tr:last-child td { border-bottom: none; }
+.cl-table th { color: var(--text-faint); font-weight: 600; white-space: nowrap; }
+.cl-stars { color: #eab308; white-space: nowrap; letter-spacing: 1px; }
+.cl-note { color: var(--text-faint); font-size: 11px; margin-top: 1px; }
+.cl-status { white-space: nowrap; font-weight: 700; }
+.cl-status.ok { color: #34c07c; }
+.cl-status.bad { color: #ef4444; }
+.cl-status.na { color: var(--text-faint); }
+.cl-gate { font-size: 12px; color: #ef4444; margin: 8px 0 0; line-height: 1.7; }
+
+.veto-block { margin: 4px 0 10px; }
+.veto-block > summary {
+  cursor: pointer;
+  font-size: 12px; font-weight: 700;
+  color: var(--text-faint);
+  padding: 8px 0;
+}
+.veto-block .pick-card { opacity: 0.8; margin-top: 10px; }

@@ -153,6 +153,68 @@
       .catch(function () { return {}; });
   }
 
+  // ---------- The Odds API: real NRFI/YRFI prices ----------
+  // Free MLB feeds (ESPN, playsport) carry no first-inning market. The Odds
+  // API's per-event "totals_1st_1_innings" (Over/Under 0.5 = YRFI/NRFI) does,
+  // but needs a free per-user key (the-odds-api.com, ~500 credits/month), so
+  // the key is user-supplied via the 🔑 link and kept in localStorage. Odds
+  // are cached 3h to stretch the quota; on any failure picks fall back to the
+  // assumed -110 line.
+  var DEFAULT_ODDS_API_KEY = "3fc688e03b27b3d41eb04f761c7f58c3"; // site owner's free-tier key
+  function getOddsApiKey() {
+    try { return localStorage.getItem("oddsApiKey") || DEFAULT_ODDS_API_KEY; } catch (e) { return DEFAULT_ODDS_API_KEY; }
+  }
+
+  function fetchNrfiOddsMap(games) {
+    var key = getOddsApiKey();
+    if (!key) return Promise.resolve({});
+    var cache = null;
+    try { cache = JSON.parse(localStorage.getItem("nrfiOddsCache")); } catch (e) {}
+    if (cache && cache.t && Date.now() - cache.t < 3 * 3600 * 1000 && cache.map) {
+      return Promise.resolve(cache.map);
+    }
+    var want = {};
+    games.forEach(function (g) { want[g.teams.away.team.name + "|" + g.teams.home.team.name] = true; });
+    return fetchJson("https://api.the-odds-api.com/v4/sports/baseball_mlb/events?apiKey=" + encodeURIComponent(key))
+      .then(function (events) {
+        var targets = (events || []).filter(function (ev) {
+          return want[ev.away_team + "|" + ev.home_team];
+        }).slice(0, 20);
+        return Promise.all(targets.map(function (ev) {
+          return fetchJson("https://api.the-odds-api.com/v4/sports/baseball_mlb/events/" + ev.id +
+              "/odds?apiKey=" + encodeURIComponent(key) +
+              "&regions=us&markets=totals_1st_1_innings&oddsFormat=american")
+            .catch(function () { return null; });
+        })).then(function (arr) {
+          var map = {};
+          arr.forEach(function (d) {
+            if (!d) return;
+            var found = null, book = null;
+            (d.bookmakers || []).forEach(function (bk) {
+              if (found) return;
+              (bk.markets || []).forEach(function (mk) {
+                if (found || mk.key !== "totals_1st_1_innings") return;
+                var over = null, under = null;
+                (mk.outcomes || []).forEach(function (oc) {
+                  if (Number(oc.point) !== 0.5) return;
+                  if (oc.name === "Over") over = oc.price;
+                  else if (oc.name === "Under") under = oc.price;
+                });
+                if (over !== null && under !== null) {
+                  found = { over: String(over), under: String(under) };
+                  book = bk.title;
+                }
+              });
+            });
+            if (found) map[d.away_team + "|" + d.home_team] = { over: found.over, under: found.under, book: book || "book" };
+          });
+          try { localStorage.setItem("nrfiOddsCache", JSON.stringify({ t: Date.now(), map: map })); } catch (e) {}
+          return map;
+        });
+      })
+      .catch(function () { return {}; });
+  }
+
   // ---------- ESPN moneyline map (open + current) ----------
   function extractMl(oddsArr) {
     if (!oddsArr || !oddsArr.length) return null;
@@ -515,7 +577,13 @@
 
     addRow("★★★", "⑬ 主審", 1, ctx.box.umpire ? esc(ctx.box.umpire) : "未公布", "na",
       "好球帶傾向無免費數據源,僅列名供人工查證,不計分");
-    addRow("★★★", "⑭ NRFI 盤口變動", 1, "—", "na", "免費賠率源無 NRFI 盤,不計分");
+    addRow("★★★", "⑭ NRFI 盤口", 1,
+      ctx.nrOdds
+        ? esc("NRFI(Under)" + ctx.nrOdds.under + " / YRFI(Over)" + ctx.nrOdds.over + "(" + ctx.nrOdds.book + ")")
+        : "—",
+      "na",
+      ctx.nrOdds ? "已取得即時賠率;開盤至今的變動歷史無免費來源,不計分"
+                 : "免費賠率源無 NRFI 盤;可於頁首設定 The Odds API 金鑰取得,不計分");
     addRow("★★★", "⑮ 先發打線", 0,
       ctx.box.awayTop3.length || ctx.box.homeTop3.length ? "已公布(見⑥⑦)" : "未公布(開賽前 1–3 小時)",
       "na", "新人/輪休異動需人工判斷,不計分");
@@ -613,11 +681,13 @@
         Promise.all(games.map(function (g) {
           return collectChecklistData(g, season).catch(function () { return null; });
         })),
+        fetchNrfiOddsMap(games),
       ]).then(function (pres) {
         var seasonStats = pres[0];
         var fiByPitcher = {};
         pitcherIds.forEach(function (id, i) { fiByPitcher[id] = pres[1][i]; });
         var extras = pres[2];
+        var nrfiOddsMap = pres[3];
 
         var candidates = [];
         games.forEach(function (g, gi) {
@@ -724,11 +794,26 @@
               else reasons2.push(pair[1] + "隊先發 " + esc(pp.fullName) + " 首局 ERA " + esc(st.era) + "。");
             });
             nrfi = clampNum(nrfi, 0.05, 0.95);
-            var beNr = impliedProb(NRFI_PRICE); // ~52.4%
-            var pickNrfi = nrfi >= 0.5;
-            var prob2 = pickNrfi ? nrfi : 1 - nrfi;
+            var nrOdds = nrfiOddsMap[away.name + "|" + home.name] || null;
+            var pickNrfi, prob2, beNr, priceLabel;
+            if (nrOdds) {
+              // real prices: pick whichever side has the bigger edge
+              var beN = impliedProb(nrOdds.under), beY = impliedProb(nrOdds.over);
+              pickNrfi = (nrfi - beN) >= ((1 - nrfi) - beY);
+              prob2 = pickNrfi ? nrfi : 1 - nrfi;
+              beNr = pickNrfi ? beN : beY;
+              priceLabel = (pickNrfi ? nrOdds.under : nrOdds.over) + "(" + nrOdds.book + ")";
+              reasons2.push("實際賠率(" + esc(nrOdds.book) + "):NRFI(Under 0.5)" + esc(nrOdds.under) +
+                " / YRFI(Over 0.5)" + esc(nrOdds.over) + ",取優勢較高的一邊。");
+            } else {
+              // no market found: assume the common -110 line
+              pickNrfi = nrfi >= 0.5;
+              prob2 = pickNrfi ? nrfi : 1 - nrfi;
+              beNr = impliedProb(NRFI_PRICE);
+              priceLabel = NRFI_PRICE + "(參考)";
+            }
             reasons2.push("估計 " + (pickNrfi ? "NRFI" : "YRFI") + " 機率 <b>" + pctStr(prob2) +
-              "</b>,以 " + NRFI_PRICE + " 水位計損益兩平為 " + pctStr(beNr) +
+              "</b>,以 " + esc(priceLabel) + " 計損益兩平為 " + pctStr(beNr) +
               ",優勢 <b>" + ((prob2 - beNr) >= 0 ? "+" : "") + ((prob2 - beNr) * 100).toFixed(1) + "%</b>。");
             var extra = extras[gi] || {
               weather: null,
@@ -745,6 +830,7 @@
               venue: g.venue && g.venue.name,
               weather: extra.weather, box: extra.box,
               ops7: extra.ops7, hitters: extra.hitters,
+              nrOdds: nrOdds,
             });
             var veto = pickNrfi && cl.gate.length >= 2;
             if (veto) reasons2.push("⚠ 檢查表「直接 PASS」條件命中 " + cl.gate.length + " 項,依規則不下 NRFI,已自排行剔除。");
@@ -752,7 +838,7 @@
             candidates.push(Object.assign({}, base, {
               type: pickNrfi ? "nrfi" : "yrfi",
               pick: pickNrfi ? "NRFI 首局雙方皆不得分" : "YRFI 首局至少一方得分",
-              price: NRFI_PRICE + "(參考)",
+              price: priceLabel,
               prob: prob2,
               market: beNr,
               edge: prob2 - beNr,
@@ -887,15 +973,32 @@
         vetoed.length + '),點開查看檢查表</summary>' +
         vetoed.map(function (c) { return pickCardHtml(c, "✗"); }).join("") + '</details>'
       : "";
+    var keySet = !!getOddsApiKey();
     el.innerHTML =
       '<div class="picks-intro analysis-box"><p>' +
       '共掃描 <b>' + candidates.length + '</b> 個候選,分為「首局 NRFI/YRFI」與「獨贏勝率」兩區,' +
       '各依「模型機率 − 市場損益兩平機率」的優勢由高至低取前 ' + TOP_N + ' 名。' +
       '每張 NRFI/YRFI 卡附 15 項進階檢查表;「直接 PASS」條件命中 2 項以上的 NRFI 一律剔除。' +
-      '優勢代表理論期望值,不代表必中;半凱利為對應的建議資金比例上限。</p></div>' +
+      '優勢代表理論期望值,不代表必中;半凱利為對應的建議資金比例上限。</p>' +
+      '<p><a href="#" id="oddsKeyLink">' +
+      (keySet ? "🔑 NRFI/YRFI 實際賠率已啟用(The Odds API;點此更換金鑰)"
+              : "🔑 設定免費 The Odds API 金鑰,即可用真實 NRFI/YRFI 賠率取代 -110 估算") +
+      '</a></p></div>' +
       sectionHtml("⚾ 首局 NRFI / YRFI", fi.slice(0, TOP_N), fi.length) +
       vetoHtml +
       sectionHtml("🏆 獨贏勝率(MLB / NBA)", ml.slice(0, TOP_N), ml.length);
+    var lk = document.getElementById("oddsKeyLink");
+    if (lk) lk.addEventListener("click", function (e) {
+      e.preventDefault();
+      var k = window.prompt("輸入 The Odds API 金鑰(至 the-odds-api.com 免費註冊;留空清除):", getOddsApiKey());
+      if (k === null) return;
+      try {
+        if (k.trim()) localStorage.setItem("oddsApiKey", k.trim());
+        else localStorage.removeItem("oddsApiKey");
+        localStorage.removeItem("nrfiOddsCache");
+      } catch (err) {}
+      run();
+    });
   }
 
   function run() {

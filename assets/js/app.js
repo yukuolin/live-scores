@@ -4,19 +4,17 @@
   var LEAGUES = {
     mlb: { label: "MLB 美國職棒", color: "#d64545" },
     nba: { label: "NBA 美國職籃", color: "#e0762c" },
-    npb: { label: "日職 NPB", color: "#3d7ab8" },
-    kbo: { label: "韓職 KBO", color: "#4a9b6e" },
+    wnba: { label: "WNBA 美國女籃", color: "#b0568f" },
   };
-  var LEAGUE_ORDER = ["mlb", "nba", "npb", "kbo"];
-  var SPORTSDB_IDS = { npb: "4591", kbo: "4830" };
+  var LEAGUE_ORDER = ["mlb", "nba", "wnba"];
 
   var state = {
     date: new Date(),
     filter: "all",
     autoRefresh: true,
     notify: false,
-    gamesByLeague: { mlb: [], nba: [], npb: [], kbo: [] },
-    errorByLeague: { mlb: null, nba: null, npb: null, kbo: null },
+    gamesByLeague: { mlb: [], nba: [], wnba: [] },
+    errorByLeague: { mlb: null, nba: null, wnba: null },
     loading: true,
     changedIds: [],
     lastUpdatedStr: null,
@@ -232,7 +230,7 @@
   // ---------- server-side odds history (collected by GitHub Actions cron) ----------
   var oddsHistCache = {}; // league -> { t, data }
   function fetchOddsHistory(league) {
-    if (league !== "mlb" && league !== "nba") return Promise.resolve(null);
+    if (league !== "mlb" && league !== "nba" && league !== "wnba") return Promise.resolve(null);
     var c = oddsHistCache[league];
     if (c && Date.now() - c.t < 240000) return Promise.resolve(c.data);
     return fetchJson("data/odds/" + league + ".json?t=" + Math.floor(Date.now() / 240000))
@@ -365,7 +363,7 @@
     picks.forEach(function (p) {
       var started = p.start && new Date(p.start).getTime() < now;
       if (!p.result && started && FETCHERS[p.league] && p.dateStr) jobs[p.league + "|" + p.dateStr] = true;
-      if (!p.close && started && (p.league === "mlb" || p.league === "nba")) histLeagues[p.league] = true;
+      if (!p.close && started && (p.league === "mlb" || p.league === "nba" || p.league === "wnba")) histLeagues[p.league] = true;
     });
     var fetches = Object.keys(jobs).map(function (k) {
       var parts = k.split("|");
@@ -640,9 +638,9 @@
     });
   }
 
-  function fetchNBA(dateStr) {
+  function fetchEspnBasketball(leagueKey, dateStr) {
     var ymd = dateStr.replace(/-/g, "");
-    var url = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=" + ymd;
+    var url = "https://site.api.espn.com/apis/site/v2/sports/basketball/" + leagueKey + "/scoreboard?dates=" + ymd;
     return fetchJson(url).then(function (data) {
       return (data.events || []).map(function (ev) {
         var comp = ev.competitions[0];
@@ -663,8 +661,8 @@
         }
 
         return {
-          id: "nba-" + ev.id,
-          league: "nba",
+          id: leagueKey + "-" + ev.id,
+          league: leagueKey,
           espnId: ev.id,
           status: cat,
           detail: detail,
@@ -677,55 +675,10 @@
     });
   }
 
-  function fetchSportsDBLeague(leagueKey, dateStr) {
-    var leagueId = SPORTSDB_IDS[leagueKey];
-    var url = "https://www.thesportsdb.com/api/v1/json/123/eventsday.php?d=" + dateStr + "&l=" + leagueId;
-    return fetchJson(url).then(function (data) {
-      var events = data.events || [];
-      return events.map(function (e) {
-        var raw = (e.strStatus || "").toUpperCase();
-        var cat = "scheduled";
-        if (["FT", "AOT", "AET", "CANC", "POST"].indexOf(raw) !== -1) cat = "final";
-        else if (raw && raw !== "NS") cat = "live";
-
-        // strTimestamp is UTC but has no zone marker; append Z so it converts to local time
-        var ts = e.strTimestamp
-          ? (e.strTimestamp.indexOf("Z") === -1 ? e.strTimestamp + "Z" : e.strTimestamp)
-          : null;
-
-        var detail;
-        if (cat === "scheduled") {
-          detail = ts ? formatTime(ts) : (e.strTime ? e.strTime.slice(0, 5) : "");
-        } else if (cat === "live") {
-          detail = e.strProgress || raw || "進行中";
-        } else {
-          detail = "已完賽";
-        }
-
-        var awayScore = e.intAwayScore !== null && e.intAwayScore !== undefined ? Number(e.intAwayScore) : null;
-        var homeScore = e.intHomeScore !== null && e.intHomeScore !== undefined ? Number(e.intHomeScore) : null;
-
-        return {
-          id: leagueKey + "-" + e.idEvent,
-          league: leagueKey,
-          tsdbId: e.idEvent,
-          raw: e,
-          status: cat,
-          detail: detail,
-          startTime: ts,
-          odds: null,
-          away: { name: e.strAwayTeam, score: awayScore, logo: e.strAwayTeamBadge || null },
-          home: { name: e.strHomeTeam, score: homeScore, logo: e.strHomeTeamBadge || null },
-        };
-      });
-    });
-  }
-
   var FETCHERS = {
     mlb: fetchMLB,
-    nba: fetchNBA,
-    npb: function (d) { return fetchSportsDBLeague("npb", d); },
-    kbo: function (d) { return fetchSportsDBLeague("kbo", d); },
+    nba: function (d) { return fetchEspnBasketball("nba", d); },
+    wnba: function (d) { return fetchEspnBasketball("wnba", d); },
   };
 
   // ---------- notifications ----------
@@ -745,8 +698,7 @@
 
   // ---------- load ----------
   function loadLeague(key) {
-    // US leagues follow the Eastern game day; NPB/KBO follow the local (Asia) date
-    var dateStr = (key === "mlb" || key === "nba") ? usDateStrFor(state.date) : toISODate(state.date);
+    var dateStr = usDateStrFor(state.date);
     var prev = {};
     state.gamesByLeague[key].forEach(function (g) { prev[g.id] = g; });
 
@@ -1254,7 +1206,7 @@
   }
 
   function hydrateOddsHistory(game) {
-    if (game.league !== "mlb" && game.league !== "nba") return;
+    if (game.league !== "mlb" && game.league !== "nba" && game.league !== "wnba") return;
     fetchOddsHistory(game.league).then(function (data) {
       if (modal.game !== game) return; // modal switched or closed meanwhile
       var slot = document.getElementById("oddsHistSlot");
@@ -1726,7 +1678,7 @@
 
   // ---------- NBA detail ----------
   function renderNbaDetail(game, body) {
-    return fetchJson("https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event=" + game.espnId).then(function (s) {
+    return fetchJson("https://site.api.espn.com/apis/site/v2/sports/basketball/" + game.league + "/summary?event=" + game.espnId).then(function (s) {
       var comp = (s.header && s.header.competitions && s.header.competitions[0]) || {};
       var competitors = comp.competitors || [];
       var homeC = competitors.find(function (c) { return c.homeAway === "home"; }) || {};
@@ -1887,90 +1839,8 @@
     return html;
   }
 
-  // ---------- NPB / KBO detail ----------
-  function parseTsdbInnings(str) {
-    if (!str) return null;
-    var blocks = String(str).split(/<br\s*\/?>\s*<br\s*\/?>/i);
-    var out = [];
-    blocks.forEach(function (b) {
-      var m = b.match(/^\s*(.*?)\s+Innings:\s*<br\s*\/?>\s*([\d\s]+?)\s*(?:<br\s*\/?>\s*Hits:\s*(\d+)\s*-\s*Errors:\s*(\d+))?\s*$/i);
-      if (m && m[2].trim()) {
-        out.push({
-          name: m[1].trim(),
-          innings: m[2].trim().split(/\s+/).map(Number),
-          hits: m[3] !== undefined ? Number(m[3]) : null,
-          errors: m[4] !== undefined ? Number(m[4]) : null,
-        });
-      }
-    });
-    return out.length >= 2 ? out : null;
-  }
-
-  function renderTsdbDetail(game, body) {
-    return fetchJson("https://www.thesportsdb.com/api/v1/json/123/lookupevent.php?id=" + game.tsdbId)
-      .catch(function () { return null; })
-      .then(function (data) {
-        var e = (data && data.events && data.events[0]) || game.raw || {};
-        var html = detailHeaderHtml(game, null, null);
-
-        var parsed = parseTsdbInnings(e.strResult);
-        if (parsed) {
-          var awayBlock = parsed.find(function (p) { return p.name === game.away.name; });
-          var homeBlock = parsed.find(function (p) { return p.name === game.home.name; });
-          if (!awayBlock || !homeBlock) { homeBlock = parsed[0]; awayBlock = parsed[1]; }
-
-          var n = Math.max(awayBlock.innings.length, homeBlock.innings.length);
-          var head = '<tr><th>隊伍</th>';
-          for (var i = 1; i <= n; i++) head += '<th>' + i + '</th>';
-          head += '<th>R</th><th>H</th><th>E</th></tr>';
-
-          function iRow(name, blk, total) {
-            var row = '<tr><td>' + esc(name) + '</td>';
-            for (var i = 0; i < n; i++) {
-              row += '<td>' + (blk.innings[i] !== undefined ? blk.innings[i] : "-") + '</td>';
-            }
-            var runs = total !== null && total !== undefined ? total : blk.innings.reduce(function (a, b) { return a + b; }, 0);
-            row += '<td><b>' + esc(runs) + '</b></td>' +
-              '<td>' + esc(blk.hits !== null ? blk.hits : "-") + '</td>' +
-              '<td>' + esc(blk.errors !== null ? blk.errors : "-") + '</td></tr>';
-            return row;
-          }
-          html += sectionBlock("逐局比分",
-            '<div class="table-wrap"><table class="stat-table">' + head +
-            iRow(game.away.name, awayBlock, game.away.score) +
-            iRow(game.home.name, homeBlock, game.home.score) +
-            '</table></div>');
-        } else if (game.status !== "scheduled") {
-          html += sectionBlock("逐局比分",
-            '<div class="analysis-box"><p>逐局比分尚未提供,通常於比賽結束後更新。</p></div>');
-        }
-
-        var metaItems = [];
-        if (game.startTime) metaItems.push(["開賽時間(台北)", formatDateTime(game.startTime)]);
-        if (e.strVenue) metaItems.push(["球場", e.strVenue]);
-        if (e.strCity) metaItems.push(["城市", e.strCity]);
-        if (e.intRound && e.intRound !== "0") metaItems.push(["輪次", e.intRound]);
-        if (e.strSeason) metaItems.push(["球季", e.strSeason]);
-        if (metaItems.length) {
-          html += sectionBlock("比賽資訊",
-            '<div class="meta-grid">' + metaItems.map(function (m) {
-              return '<div class="meta-item"><div class="k">' + esc(m[0]) + '</div><div class="v">' + esc(m[1]) + '</div></div>';
-            }).join("") + '</div>');
-        }
-
-        if (game.status === "scheduled") {
-          html += sectionBlock("賽前資訊",
-            '<div class="analysis-box"><p>此聯盟的免費資料來源未提供先發名單、球員數據與賠率;開賽後可在此查看逐局比分。</p></div>');
-        } else {
-          html += '<div class="detail-note">此聯盟的資料來源未提供球員個人數據。</div>';
-        }
-
-        body.innerHTML = html;
-      });
-  }
-
   // ---------- modal control ----------
-  var DETAIL_RENDERERS = { mlb: renderMlbDetail, nba: renderNbaDetail, npb: renderTsdbDetail, kbo: renderTsdbDetail };
+  var DETAIL_RENDERERS = { mlb: renderMlbDetail, nba: renderNbaDetail, wnba: renderNbaDetail };
 
   function loadDetail(game) {
     var body = document.getElementById("modalBody");

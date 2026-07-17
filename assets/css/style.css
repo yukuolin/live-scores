@@ -13,8 +13,6 @@
   --scheduled-bg: rgba(79, 141, 253, 0.12);
   --mlb: #d64545;
   --nba: #e0762c;
-  --npb: #3d7ab8;
-  --kbo: #4a9b6e;
   --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
 }
 
@@ -455,7 +453,7 @@ body {
 .prob-labels b { color: var(--text); }
 .prob-bar { display: flex; height: 10px; border-radius: 999px; overflow: hidden; background: var(--border); }
 .prob-bar .away-part { background: var(--accent); }
-.prob-bar .home-part { background: var(--kbo); }
+.prob-bar .home-part { background: #4a9b6e; }
 
 .analysis-box {
   background: var(--bg-card);

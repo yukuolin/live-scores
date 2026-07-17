@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /*
- * Collect ESPN odds snapshots for MLB / NBA into data/odds/<league>.json.
+ * Collect ESPN odds snapshots for MLB / NBA / WNBA into data/odds/<league>.json.
  * Runs on a schedule via GitHub Actions; appends a snapshot per game only
  * when the odds changed since the last recorded snapshot.
  *
@@ -29,6 +29,7 @@ const path = require("path");
 const LEAGUES = {
   mlb: "baseball/mlb",
   nba: "basketball/nba",
+  wnba: "basketball/wnba",
 };
 const OUT_DIR = path.join(__dirname, "..", "data", "odds");
 const KEEP_MS = 4 * 86400000; // drop events older than 4 days

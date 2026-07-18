@@ -66,6 +66,31 @@
     return (kelly / 2 * 100).toFixed(1) + "%";
   }
 
+  // ---------- game-total (大小分) model ----------
+  // expected total runs: each side = (own runs scored + opponent runs allowed)/2,
+  // nudged by each starter's season ERA vs the ~4.20 league average
+  var TOTAL_SD = 4.3; // empirical stdev of MLB combined runs
+  var LEAGUE_ERA = 4.2;
+  function expectedTotalRuns(aRuns, hRuns, aEra, hEra) {
+    if (!aRuns || !hRuns || aRuns.rsAvg === null || hRuns.rsAvg === null) return null;
+    var tot = (aRuns.rsAvg + hRuns.raAvg) / 2 + (hRuns.rsAvg + aRuns.raAvg) / 2;
+    [aEra, hEra].forEach(function (e) {
+      e = Number(e);
+      if (isFinite(e) && e > 0) tot += clampNum((e - LEAGUE_ERA) * 0.22, -0.7, 0.7);
+    });
+    return clampNum(tot, 5, 13.5);
+  }
+  // Abramowitz-Stegun normal CDF approximation
+  function normCdf(z) {
+    var t = 1 / (1 + 0.2316419 * Math.abs(z));
+    var d = 0.3989423 * Math.exp(-z * z / 2);
+    var p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
+    return z > 0 ? 1 - p : p;
+  }
+  function overProbOf(expTot, line) {
+    return 1 - normCdf((line - expTot) / TOTAL_SD);
+  }
+
   // ---------- playsport.cc fallback moneyline (台灣運彩盤) ----------
   // The guess page embeds "var vueData = {...}" with every listed game's
   // markets; gametype with isMoneyLine=true is the 獨贏 pair (option 1 = 主,
@@ -254,6 +279,40 @@
     return map;
   }
 
+  // game-total market: line + over/under prices when posted, or the bare
+  // overUnder number (prices assumed -110) before ESPN opens the juice
+  function extractTot(oddsArr) {
+    if (!oddsArr || !oddsArr.length) return null;
+    var o = oddsArr.find(function (x) { return x.total || x.overUnder !== undefined; }) || oddsArr[0];
+    if (o.total) {
+      function side(s) {
+        var x = o.total[s];
+        return x && x.close ? { price: x.close.odds || null, line: x.close.line || null } : null;
+      }
+      var ov = side("over"), un = side("under");
+      var line = Number(String((ov && ov.line) || (un && un.line) || "").replace(/^[ou]/i, ""));
+      if (isFinite(line) && line > 0 && ov && un && ov.price && un.price) {
+        return { line: line, over: String(ov.price), under: String(un.price), real: true };
+      }
+    }
+    var bare = Number(o.overUnder);
+    if (isFinite(bare) && bare > 0) return { line: bare, over: NRFI_PRICE, under: NRFI_PRICE, real: false };
+    return null;
+  }
+  function buildEspnTotMap(data) {
+    var map = {};
+    (data.events || []).forEach(function (ev) {
+      var comp = ev.competitions && ev.competitions[0];
+      if (!comp) return;
+      var tot = extractTot(comp.odds);
+      if (!tot) return;
+      var home = (comp.competitors || []).find(function (c) { return c.homeAway === "home"; });
+      var away = (comp.competitors || []).find(function (c) { return c.homeAway === "away"; });
+      if (home && away) map[away.team.displayName + "|" + home.team.displayName] = tot;
+    });
+    return map;
+  }
+
   // open -> current shift of the vig-free home probability (percentage points)
   function mlMoveNote(ml, pickIsHome, awayName, homeName) {
     if (!ml.a.open || !ml.h.open) return null;
@@ -290,13 +349,14 @@
   }
 
   // one range-schedule call covers every team's recent first-inning record
+  // and full-game runs scored/allowed (feeds the game-total model)
   function fetchFirstInningRates() {
     var end = new Date(); end.setDate(end.getDate() - 1);
     var start = new Date(); start.setDate(start.getDate() - 25);
     var url = "https://statsapi.mlb.com/api/v1/schedule?sportId=1&startDate=" + toISODate(start) +
       "&endDate=" + toISODate(end) + "&hydrate=linescore";
     return fetchJson(url).then(function (data) {
-      var byTeam = {}; // teamId -> chronological [{scored, allowed}]
+      var byTeam = {}; // teamId -> chronological [{scored, allowed, rs, ra}]
       (data.dates || []).forEach(function (d) {
         (d.games || []).forEach(function (g) {
           if (!(g.status && g.status.abstractGameState === "Final")) return;
@@ -304,17 +364,28 @@
           if (!inn1 || !inn1.away || !inn1.home) return;
           var aRuns = Number(inn1.away.runs) > 0, hRuns = Number(inn1.home.runs) > 0;
           var aId = g.teams.away.team.id, hId = g.teams.home.team.id;
-          (byTeam[aId] = byTeam[aId] || []).push({ scored: aRuns, allowed: hRuns });
-          (byTeam[hId] = byTeam[hId] || []).push({ scored: hRuns, allowed: aRuns });
+          var aScore = Number(g.teams.away.score), hScore = Number(g.teams.home.score);
+          if (!isFinite(aScore) || !isFinite(hScore)) aScore = hScore = null;
+          (byTeam[aId] = byTeam[aId] || []).push({ scored: aRuns, allowed: hRuns, rs: aScore, ra: hScore });
+          (byTeam[hId] = byTeam[hId] || []).push({ scored: hRuns, allowed: aRuns, rs: hScore, ra: aScore });
         });
       });
       var rates = {};
       Object.keys(byTeam).forEach(function (id) {
         var games = byTeam[id].slice(-15);
         if (games.length < 8) return;
-        var off = 0, def = 0;
-        games.forEach(function (g) { if (g.scored) off++; if (g.allowed) def++; });
-        rates[id] = { n: games.length, off: off, def: def, offRate: off / games.length, defRate: def / games.length };
+        var off = 0, def = 0, rsSum = 0, raSum = 0, runN = 0;
+        games.forEach(function (g) {
+          if (g.scored) off++;
+          if (g.allowed) def++;
+          if (g.rs !== null) { rsSum += g.rs; raSum += g.ra; runN++; }
+        });
+        rates[id] = {
+          n: games.length, off: off, def: def,
+          offRate: off / games.length, defRate: def / games.length,
+          rsAvg: runN ? rsSum / runN : null,
+          raAvg: runN ? raSum / runN : null,
+        };
       });
       return rates;
     }).catch(function () { return {}; });
@@ -656,10 +727,11 @@
     var season = Number(today.slice(0, 4));
     var schedP = fetchJson("https://statsapi.mlb.com/api/v1/schedule?sportId=1&date=" + today + "&hydrate=probablePitcher,team");
     var espnP = fetchJson("https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard?dates=" + today.replace(/-/g, ""))
-      .then(buildEspnMlMap).catch(function () { return {}; });
+      .then(function (data) { return { ml: buildEspnMlMap(data), tot: buildEspnTotMap(data) }; })
+      .catch(function () { return { ml: {}, tot: {} }; });
 
     return Promise.all([schedP, fetchMlbStandings(season), espnP, fetchFirstInningRates(), fetchPlaysportMlMap()]).then(function (res) {
-      var sched = res[0], standings = res[1], mlMap = res[2], fiRates = res[3], psMap = res[4];
+      var sched = res[0], standings = res[1], mlMap = res[2].ml, totMap = res[2].tot, fiRates = res[3], psMap = res[4];
       var games = [];
       (sched.dates || []).forEach(function (d) { games = games.concat(d.games || []); });
       games = games.filter(function (g) {
@@ -847,6 +919,44 @@
               veto: veto,
             }));
           }
+
+          // -- 大小分 (game total O/U) --
+          var tot = totMap[away.name + "|" + home.name];
+          var expTot = expectedTotalRuns(aFi, hFi, aSt.era, hSt.era);
+          if (tot && expTot !== null) {
+            var pOver = overProbOf(expTot, tot.line);
+            var beO = impliedProb(tot.over), beU = impliedProb(tot.under);
+            if (beO !== null && beU !== null) {
+              var edgeO = pOver - beO, edgeU = (1 - pOver) - beU;
+              var pickOver = edgeO >= edgeU;
+              var probT = pickOver ? pOver : 1 - pOver;
+              var beT = pickOver ? beO : beU;
+              var reasons3 = [
+                "客隊近 " + aFi.n + " 場平均得 " + aFi.rsAvg.toFixed(1) + " 分/失 " + aFi.raAvg.toFixed(1) +
+                  " 分;主隊近 " + hFi.n + " 場平均得 " + hFi.rsAvg.toFixed(1) + " 分/失 " + hFi.raAvg.toFixed(1) + " 分。",
+              ];
+              if (ppA && ppH && (aSt.era || hSt.era)) {
+                reasons3.push("先發 ERA:" + esc(ppA.fullName) + " " + esc(aSt.era || "-") +
+                  " vs " + esc(ppH.fullName) + " " + esc(hSt.era || "-") +
+                  ",對照聯盟平均 " + LEAGUE_ERA.toFixed(2) + " 已計入總分調整。");
+              }
+              reasons3.push("模型預期總分 <b>" + expTot.toFixed(1) + "</b> 分 vs 盤口總分線 <b>" + tot.line +
+                "</b>,估計大分機率 " + pctStr(pOver) + " / 小分 " + pctStr(1 - pOver) + "。");
+              reasons3.push("取優勢較高的「" + (pickOver ? "大分" : "小分") + "」:機率 <b>" + pctStr(probT) +
+                "</b>,以 " + esc(pickOver ? tot.over : tot.under) + " 計損益兩平 " + pctStr(beT) +
+                ",優勢 <b>" + ((probT - beT) >= 0 ? "+" : "") + ((probT - beT) * 100).toFixed(1) + "%</b>。");
+              if (!tot.real) reasons3.push("ESPN 僅開出總分線、尚未開出大小分價位,暫以 -110 參考水位估算,開盤後請以實際賠率為準。");
+              candidates.push(Object.assign({}, base, {
+                type: pickOver ? "over" : "under",
+                pick: (pickOver ? "大分 Over " : "小分 Under ") + tot.line,
+                price: (pickOver ? tot.over : tot.under) + (tot.real ? "" : "(參考)"),
+                prob: probT,
+                market: beT,
+                edge: probT - beT,
+                reasons: reasons3,
+              }));
+            }
+          }
         });
         return candidates;
       });
@@ -907,7 +1017,7 @@
   }
 
   // ---------- render ----------
-  var TYPE_LABEL = { ml: "獨贏", nrfi: "首局 NRFI", yrfi: "首局 YRFI" };
+  var TYPE_LABEL = { ml: "獨贏", nrfi: "首局 NRFI", yrfi: "首局 YRFI", over: "大分", under: "小分" };
 
   function pickCardHtml(c, rank) {
     var kelly = halfKellyStr(c.prob, String(c.price).replace(/\(.*$/, ""));
@@ -963,8 +1073,9 @@
     var fi = fiAll.filter(function (c) { return !c.veto; });
     var vetoed = fiAll.filter(function (c) { return c.veto; });
     var ml = candidates.filter(function (c) { return c.type === "ml"; }).sort(byEdge);
+    var ou = candidates.filter(function (c) { return c.type === "over" || c.type === "under"; }).sort(byEdge);
 
-    if (!fiAll.length && !ml.length) {
+    if (!fiAll.length && !ml.length && !ou.length) {
       el.innerHTML = '<div class="empty-state">今天沒有可分析的未開賽場次(賽事已全部開打、休兵日,或賠率尚未開出)。<br>盤口通常於美東早上陸續開出,可稍後再回來看。</div>';
       return;
     }
@@ -976,7 +1087,7 @@
     var keySet = !!getOddsApiKey();
     el.innerHTML =
       '<div class="picks-intro analysis-box"><p>' +
-      '共掃描 <b>' + candidates.length + '</b> 個候選,分為「首局 NRFI/YRFI」與「獨贏勝率」兩區,' +
+      '共掃描 <b>' + candidates.length + '</b> 個候選,分為「首局 NRFI/YRFI」「大小分」與「獨贏勝率」三區,' +
       '各依「模型機率 − 市場損益兩平機率」的優勢由高至低取前 ' + TOP_N + ' 名。' +
       '每張 NRFI/YRFI 卡附 15 項進階檢查表;「直接 PASS」條件命中 2 項以上的 NRFI 一律剔除。' +
       '優勢代表理論期望值,不代表必中;半凱利為對應的建議資金比例上限。</p>' +
@@ -986,6 +1097,7 @@
       '</a></p></div>' +
       sectionHtml("⚾ 首局 NRFI / YRFI", fi.slice(0, TOP_N), fi.length) +
       vetoHtml +
+      sectionHtml("📊 大小分(MLB 全場總分 Over/Under)", ou.slice(0, TOP_N), ou.length) +
       sectionHtml("🏆 獨贏勝率(MLB / NBA)", ml.slice(0, TOP_N), ml.length);
     var lk = document.getElementById("oddsKeyLink");
     if (lk) lk.addEventListener("click", function (e) {

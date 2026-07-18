@@ -140,6 +140,31 @@
   function pctStr(p) { return (p * 100).toFixed(1) + "%"; }
   function clampNum(v, lo, hi) { return Math.min(hi, Math.max(lo, v)); }
 
+  // ---------- game-total (大小分) model — mirrors assets/js/picks.js ----------
+  // expected total runs: each side = (own runs scored + opponent runs allowed)/2,
+  // nudged by each starter's season ERA vs the ~4.20 league average
+  var TOTAL_SD = 4.3; // empirical stdev of MLB combined runs
+  var LEAGUE_ERA = 4.2;
+  function expectedTotalRuns(aRuns, hRuns, aEra, hEra) {
+    if (!aRuns || !hRuns || aRuns.rsAvg === null || hRuns.rsAvg === null) return null;
+    var tot = (aRuns.rsAvg + hRuns.raAvg) / 2 + (hRuns.rsAvg + aRuns.raAvg) / 2;
+    [aEra, hEra].forEach(function (e) {
+      e = Number(e);
+      if (isFinite(e) && e > 0) tot += clampNum((e - LEAGUE_ERA) * 0.22, -0.7, 0.7);
+    });
+    return clampNum(tot, 5, 13.5);
+  }
+  // Abramowitz-Stegun normal CDF approximation
+  function normCdf(z) {
+    var t = 1 / (1 + 0.2316419 * Math.abs(z));
+    var d = 0.3989423 * Math.exp(-z * z / 2);
+    var p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
+    return z > 0 ? 1 - p : p;
+  }
+  function overProbOf(expTot, line) {
+    return 1 - normCdf((line - expTot) / TOTAL_SD);
+  }
+
   // implied-probability table for all posted markets; null if no usable moneyline
   function oddsImpliedAnalysis(od) {
     if (!od || !od.mlAway || !od.mlAway.cur || !od.mlHome || !od.mlHome.cur) return null;
@@ -1402,7 +1427,7 @@
           g.linescore && g.linescore.innings && g.linescore.innings[0];
       }).slice(-15);
       if (games.length < 8) return null;
-      var off = 0, def = 0;
+      var off = 0, def = 0, rsSum = 0, raSum = 0, runN = 0;
       games.forEach(function (g) {
         var isAway = g.teams.away.team.id === teamId;
         var inn1 = g.linescore.innings[0];
@@ -1410,8 +1435,17 @@
         var opp = isAway ? inn1.home : inn1.away;
         if (own && Number(own.runs) > 0) off++;
         if (opp && Number(opp.runs) > 0) def++;
+        // full-game runs for the game-total (大小分) model
+        var rs = Number(isAway ? g.teams.away.score : g.teams.home.score);
+        var ra = Number(isAway ? g.teams.home.score : g.teams.away.score);
+        if (isFinite(rs) && isFinite(ra)) { rsSum += rs; raSum += ra; runN++; }
       });
-      var v = { n: games.length, off: off, def: def, offRate: off / games.length, defRate: def / games.length };
+      var v = {
+        n: games.length, off: off, def: def,
+        offRate: off / games.length, defRate: def / games.length,
+        rsAvg: runN ? rsSum / runN : null,
+        raAvg: runN ? raSum / runN : null,
+      };
       fiCache[teamId] = { t: Date.now(), v: v };
       return v;
     }).catch(function () { return null; });
@@ -1669,6 +1703,62 @@
         oaInner += '<div class="analysis-box" style="margin-top:10px">' + oaNotes.join("") + '</div>' +
           '<div class="detail-note">模型為戰績/近十場/先發投手之簡易統計推估,與市場數據比較僅供參考。</div>';
         html += sectionBlock("美式賠率分析", oaInner);
+      }
+
+      // game-total (大小分) odds analysis
+      var od = game.odds;
+      var totLine = null, oPrice = null, uPrice = null;
+      if (od) {
+        if (od.over && od.over.line) {
+          var tl = Number(stripOU(od.over.line));
+          if (isFinite(tl) && tl > 0) {
+            totLine = tl;
+            oPrice = od.over.cur || null;
+            uPrice = (od.under && od.under.cur) || null;
+          }
+        }
+        if (totLine === null && od.overUnder !== null && od.overUnder !== undefined) {
+          var tl2 = Number(od.overUnder);
+          if (isFinite(tl2) && tl2 > 0) totLine = tl2;
+        }
+      }
+      var aStT = pp.away ? (statsById[pp.away.id] || {}) : {};
+      var hStT = pp.home ? (statsById[pp.home.id] || {}) : {};
+      var expTot = expectedTotalRuns(awayFi, homeFi, aStT.era, hStT.era);
+      if (totLine !== null && expTot !== null) {
+        var pOver = overProbOf(expTot, totLine);
+        var priceReal = !!(oPrice && uPrice);
+        var beO = impliedProb(oPrice || "-110"), beU = impliedProb(uPrice || "-110");
+        var inner2 = probBarHtml("大分 Over " + totLine, "小分 Under " + totLine, pOver * 100, (1 - pOver) * 100);
+        function ouRow(label, price, be, prob) {
+          var edge = prob - be;
+          return '<tr><td>' + label + '</td><td>' + esc(price) + '</td><td>' + (be !== null ? pctStr(be) : "-") + '</td>' +
+            '<td><b>' + pctStr(prob) + '</b></td>' +
+            '<td class="' + (edge >= 0 ? "pos" : "neg") + '"><b>' + (edge >= 0 ? "+" : "") + (edge * 100).toFixed(1) + '%</b></td></tr>';
+        }
+        inner2 += '<div class="table-wrap" style="margin-top:10px"><table class="stat-table" style="min-width:380px">' +
+          '<tr><th>方向</th><th>賠率</th><th>損益兩平</th><th>模型機率</th><th>優勢</th></tr>' +
+          ouRow("大分 Over " + totLine, oPrice || "-110(參考)", beO, pOver) +
+          ouRow("小分 Under " + totLine, uPrice || "-110(參考)", beU, 1 - pOver) +
+          '</table></div>';
+        var ouNotes = [];
+        if (awayFi && homeFi && awayFi.rsAvg !== null && homeFi.rsAvg !== null) {
+          ouNotes.push("<p>客隊近 " + awayFi.n + " 場平均得 <b>" + awayFi.rsAvg.toFixed(1) + "</b> 分/失 " + awayFi.raAvg.toFixed(1) +
+            " 分;主隊近 " + homeFi.n + " 場平均得 <b>" + homeFi.rsAvg.toFixed(1) + "</b> 分/失 " + homeFi.raAvg.toFixed(1) + " 分。</p>");
+        }
+        if (pp.away && pp.home && (aStT.era || hStT.era)) {
+          ouNotes.push("<p>先發 ERA:" + esc(pp.away.fullName) + " <b>" + esc(aStT.era || "-") + "</b> vs " +
+            esc(pp.home.fullName) + " <b>" + esc(hStT.era || "-") + "</b>,對照聯盟平均 " + LEAGUE_ERA.toFixed(2) + " 已計入總分調整。</p>");
+        }
+        var edgeO2 = pOver - (beO === null ? 0.524 : beO), edgeU2 = (1 - pOver) - (beU === null ? 0.524 : beU);
+        var leanOver = edgeO2 >= edgeU2;
+        ouNotes.push("<p>模型預期總分 <b>" + expTot.toFixed(1) + "</b> 分 vs 盤口總分線 <b>" + totLine + "</b>," +
+          "優勢較高的一邊為 <b>" + (leanOver ? "大分 Over" : "小分 Under") + "</b>(" +
+          ((leanOver ? edgeO2 : edgeU2) >= 0 ? "+" : "") + ((leanOver ? edgeO2 : edgeU2) * 100).toFixed(1) + "%)。</p>");
+        if (!priceReal) ouNotes.push("<p>ESPN 目前僅提供總分線,大小分價位以常見 -110 參考水位估算,開盤後請以實際賠率為準。</p>");
+        inner2 += '<div class="analysis-box" style="margin-top:10px">' + ouNotes.join("") + '</div>' +
+          '<div class="detail-note">預期總分以兩隊近況得失分與先發 ERA 推估,並以常態分布(σ≈' + TOTAL_SD + ')換算大小分機率,僅供參考。</div>';
+        html += sectionBlock("大小分(全場總分)賠率分析", inner2);
       }
 
       html += oddsDetailHtml(game);

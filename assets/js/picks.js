@@ -379,6 +379,18 @@
     if (!f0 || !f1) return null;
     return (f1.home - f0.home) * 100;
   }
+  // sign of the total *line*'s own movement (>0 raised => over favoured, <0
+  // lowered => under favoured). When the number itself moves, comparing raw
+  // O/U prices across two different lines is misleading (a shorter Over price
+  // at a lower total can be pure math, not fresh money), so this takes
+  // priority over the vig-free price shift whenever the line actually moved.
+  function totalLineDir(snaps) {
+    var withTot = snaps.filter(function (s) { return isUsableOdds(s.tot); });
+    if (withTot.length < 2) return null;
+    var t0 = Number(withTot[0].tot), t1 = Number(withTot[withTot.length - 1].tot);
+    if (!isFinite(t0) || !isFinite(t1) || t0 === t1) return null;
+    return { d: t1 - t0, from: t0, to: t1 };
+  }
 
   function collectLineDirection(candidates) {
     var seen = {}, games = [];
@@ -402,9 +414,21 @@
         if (mlD !== null && Math.abs(mlD) >= 1) {
           mlMoves.push({ away: g.away, home: g.home, league: g.league, d: mlD });
         }
-        var totD = pairShift(entry.snaps, "uO", "oO"); // >0 over gaining, <0 under gaining
+        var totPriceD = pairShift(entry.snaps, "uO", "oO"); // >0 over gaining, <0 under gaining
+        var lineDir = totalLineDir(entry.snaps); // >0 line raised, <0 line lowered
+        var totD, lineFrom = null, lineTo = null;
+        if (lineDir !== null) {
+          // the total number moved: trust its direction, keep the price
+          // shift's magnitude when available so the badge stays comparable
+          var mag = totPriceD !== null ? Math.abs(totPriceD) : Math.abs(lineDir.d) * 10;
+          totD = lineDir.d > 0 ? mag : -mag;
+          lineFrom = lineDir.from;
+          lineTo = lineDir.to;
+        } else {
+          totD = totPriceD;
+        }
         if (totD !== null && Math.abs(totD) >= 1) {
-          totMoves.push({ away: g.away, home: g.home, league: g.league, d: totD });
+          totMoves.push({ away: g.away, home: g.home, league: g.league, d: totD, lineFrom: lineFrom, lineTo: lineTo });
         }
       });
       return { mlMoves: mlMoves, totMoves: totMoves, scanned: games.length };
@@ -435,7 +459,9 @@
     var underN = res.totMoves.filter(function (m) { return m.d < 0; }).length;
 
     var movers = res.mlMoves.map(function (m) { return { away: m.away, home: m.home, d: m.d, kind: "ml" }; })
-      .concat(res.totMoves.map(function (m) { return { away: m.away, home: m.home, d: m.d, kind: "tot" }; }));
+      .concat(res.totMoves.map(function (m) {
+        return { away: m.away, home: m.home, d: m.d, kind: "tot", lineFrom: m.lineFrom, lineTo: m.lineTo };
+      }));
     movers.sort(function (a, b) { return Math.abs(b.d) - Math.abs(a.d); });
     movers = movers.slice(0, 6);
     var moversHtml = movers.map(function (m) {
@@ -449,9 +475,12 @@
         badgeClass = m.d > 0 ? "over" : "under";
         badgeText = (m.d > 0 ? "📈大 " : "📈小 ") + Math.abs(m.d).toFixed(1);
       }
+      var lineNote = (m.kind === "tot" && m.lineFrom !== null && m.lineFrom !== undefined && m.lineFrom !== m.lineTo)
+        ? '<span class="dir-mover-line">總分線 ' + esc(m.lineFrom) + ' → ' + esc(m.lineTo) + '</span>'
+        : "";
       return '<li><span class="move-badge ' + badgeClass + '">' + badgeText + '</span>' +
         '<div class="dir-mover-match">' + esc(m.away) + ' @ ' + esc(m.home) + '</div>' +
-        '<div class="dir-mover-side">' + favSide + ' 越來越被看好</div></li>';
+        '<div class="dir-mover-side">' + favSide + ' 越來越被看好' + lineNote + '</div></li>';
     }).join("");
 
     return title +

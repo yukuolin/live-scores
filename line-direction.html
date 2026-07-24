@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- 私人站台:不允許任何搜尋引擎索引、跟隨或快取,僅供知道網址者使用 -->
+<meta name="robots" content="noindex, nofollow, noarchive, nosnippet, noimageindex">
+<meta name="googlebot" content="noindex, nofollow, noarchive, nosnippet, noimageindex">
+<meta name="referrer" content="no-referrer">
+<title>盤口方向 | 盤口數據分析站</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📈</text></svg>">
+<link rel="stylesheet" href="assets/css/style.css?v=14">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="header-inner">
+    <div class="brand">
+      <span class="brand-icon">📈</span>
+      <div class="brand-text">
+        <h1>盤口方向</h1>
+        <p class="subtitle">統計今日未開賽賽事的資金流向與總分線調整(MLB・NBA・WNBA)</p>
+      </div>
+    </div>
+    <div class="header-actions">
+      <span class="updated-at" id="updatedAt">計算中…</span>
+      <button class="icon-btn" id="refreshBtn" title="重新計算" aria-label="重新計算">⟳</button>
+      <a class="icon-btn nav-link" href="picks.html" title="今日推薦 TOP 5" aria-label="今日推薦 TOP 5">🎯</a>
+      <a class="icon-btn nav-link" href="index.html" title="返回比分與盤口" aria-label="返回比分與盤口">🏠</a>
+    </div>
+  </div>
+</header>
+
+<main id="lineDirContent" class="content">
+  <div class="detail-loading"><div class="spinner"></div>正在抓取今日賽程與盤口歷史,統計資金流向…</div>
+</main>
+
+<footer class="site-footer">
+  <p>盤口走勢為本站每約 20-240 分鐘採樣 ESPN 賠率所得,僅涵蓋當天未開賽的賽事;總分線調整取自伺服器紀錄的實際盤口變動。</p>
+  <p>統計為賠率歷史之走勢彙整,僅供研究參考,不構成投注建議。請遵守所在地法規、理性投注,未滿 18 歲請勿使用。</p>
+</footer>
+
+<script src="assets/js/line-direction.js?v=1"></script>
+</body>
+</html>

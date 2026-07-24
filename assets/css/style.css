@@ -575,9 +575,6 @@ a.icon-btn.nav-link { text-decoration: none; }
 .picks-content { max-width: 1180px; }
 .picks-intro { margin-bottom: 14px; }
 
-.picks-layout { display: flex; align-items: flex-start; gap: 20px; }
-.picks-main { flex: 1; min-width: 0; }
-
 .picks-section-title {
   display: flex; align-items: baseline; gap: 10px;
   font-size: 16px; font-weight: 800;
@@ -695,40 +692,7 @@ a.icon-btn.nav-link { text-decoration: none; }
 }
 .veto-block .pick-card { opacity: 0.8; margin-top: 10px; }
 
-/* ---------- 盤口方向 side panel ---------- */
-.side-panel {
-  flex: 0 0 300px;
-  width: 300px;
-  position: sticky;
-  top: 76px;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 14px 16px;
-}
-.side-panel-title {
-  display: flex; align-items: baseline; gap: 10px;
-  font-size: 15px; font-weight: 800;
-  margin: 0 0 10px;
-  padding-bottom: 6px;
-  border-bottom: 1px solid var(--border);
-}
-.side-panel-subtitle {
-  font-size: 13px; font-weight: 700;
-  margin: 18px 0 10px;
-  padding-top: 14px;
-  border-top: 1px solid var(--border);
-}
-.side-panel-loading { padding: 24px 0; text-align: center; color: var(--text-faint); font-size: 12px; }
-.side-panel-loading .spinner {
-  width: 20px; height: 20px;
-  border: 2px solid var(--border);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  margin: 0 auto 8px;
-  animation: spin-loop 0.8s linear infinite;
-}
-
+/* ---------- 盤口方向 stats (line-direction.html) ---------- */
 .dir-meter { margin-bottom: 14px; }
 .dir-meter:last-of-type { margin-bottom: 0; }
 .dir-meter-label {
@@ -750,8 +714,3 @@ a.icon-btn.nav-link { text-decoration: none; }
 
 .move-badge.over { background: rgba(234, 179, 8, 0.15); color: #ca9a04; }
 .move-badge.under { background: rgba(96, 165, 250, 0.15); color: #3b82f6; }
-
-@media (max-width: 900px) {
-  .picks-layout { flex-direction: column; }
-  .side-panel { width: 100%; flex-basis: auto; position: static; }
-}

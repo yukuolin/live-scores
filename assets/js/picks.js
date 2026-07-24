@@ -327,6 +327,151 @@
       " 百分點," + (agree ? "與本推薦<b>同向</b>,市場資金也在買進這一邊" : "與本推薦<b>反向</b>,屬逆市注,注意風險") + "。";
   }
 
+  // ---------- 盤口方向: aggregate market movement across today's whole slate ----------
+  // Reuses the server-collected data/odds/<league>.json history (see
+  // scripts/collect-odds.js) that the game-detail modal already draws its
+  // "市場動向" note from, but rolls every scanned game up into one summary
+  // instead of showing a single game's move.
+  var lineHistCache = {};
+  function fetchLineHistFile(league) {
+    var c = lineHistCache[league];
+    if (c && Date.now() - c.t < 240000) return Promise.resolve(c.data);
+    return fetchJson("data/odds/" + league + ".json?t=" + Math.floor(Date.now() / 240000))
+      .then(function (d) { lineHistCache[league] = { t: Date.now(), data: d }; return d; })
+      .catch(function () { return c ? c.data : null; });
+  }
+  function findLineHistEntry(data, awayName, homeName, startIso) {
+    if (!data || !data.events) return null;
+    var key = awayName + "|" + homeName, hit = null;
+    Object.keys(data.events).forEach(function (id) {
+      var e = data.events[id];
+      if (e.key !== key) return;
+      // same matchup can repeat within a series; require the same local date
+      if (startIso && e.date && toISODate(new Date(e.date)) !== toISODate(new Date(startIso))) return;
+      hit = e;
+    });
+    return hit;
+  }
+  function isUsableOdds(v) {
+    if (v === undefined || v === null) return false;
+    var n = Number(String(v).replace(/^\+/, ""));
+    return isFinite(n) && n !== 0;
+  }
+  // earliest and latest recorded snapshot where both fields are priced
+  function firstLastPair(snaps, keyA, keyB) {
+    var first = null, last = null;
+    for (var i = 0; i < snaps.length; i++) {
+      var s = snaps[i];
+      if (isUsableOdds(s[keyA]) && isUsableOdds(s[keyB])) {
+        if (!first) first = s;
+        last = s;
+      }
+    }
+    return (first && last && first !== last) ? { first: first, last: last } : null;
+  }
+  // percentage-point shift of keyB's vig-free share from first snapshot to last
+  // (positive => the keyB side is gaining money/market confidence)
+  function pairShift(snaps, keyA, keyB) {
+    var fl = firstLastPair(snaps, keyA, keyB);
+    if (!fl) return null;
+    var f0 = fairProbs(fl.first[keyA], fl.first[keyB]);
+    var f1 = fairProbs(fl.last[keyA], fl.last[keyB]);
+    if (!f0 || !f1) return null;
+    return (f1.home - f0.home) * 100;
+  }
+
+  function collectLineDirection(candidates) {
+    var seen = {}, games = [];
+    candidates.forEach(function (c) {
+      var k = c.league + "|" + c.away + "|" + c.home + "|" + c.start;
+      if (!seen[k]) { seen[k] = true; games.push(c); }
+    });
+    var wantLeagues = {};
+    games.forEach(function (g) { wantLeagues[g.league === "NBA" ? "nba" : "mlb"] = true; });
+    return Promise.all(Object.keys(wantLeagues).map(function (lg) {
+      return fetchLineHistFile(lg).then(function (d) { return { lg: lg, d: d }; });
+    })).then(function (files) {
+      var byLeague = {};
+      files.forEach(function (f) { byLeague[f.lg] = f.d; });
+      var mlMoves = [], totMoves = [];
+      games.forEach(function (g) {
+        var data = byLeague[g.league === "NBA" ? "nba" : "mlb"];
+        var entry = findLineHistEntry(data, g.away, g.home, g.start);
+        if (!entry || !entry.snaps || entry.snaps.length < 2) return;
+        var mlD = pairShift(entry.snaps, "mlA", "mlH"); // >0 home gaining, <0 away gaining
+        if (mlD !== null && Math.abs(mlD) >= 1) {
+          mlMoves.push({ away: g.away, home: g.home, league: g.league, d: mlD });
+        }
+        var totD = pairShift(entry.snaps, "uO", "oO"); // >0 over gaining, <0 under gaining
+        if (totD !== null && Math.abs(totD) >= 1) {
+          totMoves.push({ away: g.away, home: g.home, league: g.league, d: totD });
+        }
+      });
+      return { mlMoves: mlMoves, totMoves: totMoves, scanned: games.length };
+    }).catch(function () { return { mlMoves: [], totMoves: [], scanned: games.length }; });
+  }
+
+  function lineDirectionHtml(res) {
+    var title = '<h2 class="side-panel-title">📈 盤口方向<span class="picks-section-count">已掃描 ' +
+      res.scanned + ' 場</span></h2>';
+    if (!res.scanned) {
+      return title + '<div class="empty-state">今天沒有可分析的場次。</div>';
+    }
+    if (!res.mlMoves.length && !res.totMoves.length) {
+      return title + '<div class="empty-state">賠率歷史樣本不足或變動不明顯(伺服器每約 4 小時擷取一次),稍後再回來看。</div>';
+    }
+    function meter(label, leftN, rightN, leftLabel, rightLabel) {
+      if (!leftN && !rightN) return "";
+      var tot = leftN + rightN || 1;
+      return '<div class="dir-meter">' +
+        '<div class="dir-meter-label"><span>' + label + '</span><span>' +
+        leftLabel + ' <b>' + leftN + '</b>‧' + rightLabel + ' <b>' + rightN + '</b></span></div>' +
+        '<div class="prob-bar"><div class="away-part" style="flex:' + (leftN || 0.001) + '"></div>' +
+        '<div class="home-part" style="flex:' + (rightN || 0.001) + '"></div></div></div>';
+    }
+    var homeN = res.mlMoves.filter(function (m) { return m.d > 0; }).length;
+    var awayN = res.mlMoves.filter(function (m) { return m.d < 0; }).length;
+    var overN = res.totMoves.filter(function (m) { return m.d > 0; }).length;
+    var underN = res.totMoves.filter(function (m) { return m.d < 0; }).length;
+
+    var movers = res.mlMoves.map(function (m) { return { away: m.away, home: m.home, d: m.d, kind: "ml" }; })
+      .concat(res.totMoves.map(function (m) { return { away: m.away, home: m.home, d: m.d, kind: "tot" }; }));
+    movers.sort(function (a, b) { return Math.abs(b.d) - Math.abs(a.d); });
+    movers = movers.slice(0, 6);
+    var moversHtml = movers.map(function (m) {
+      var favSide, badgeClass, badgeText;
+      if (m.kind === "ml") {
+        favSide = m.d > 0 ? esc(m.home) + "(主)" : esc(m.away) + "(客)";
+        badgeClass = m.d > 0 ? "home" : "away";
+        badgeText = (m.d > 0 ? "📈主 " : "📈客 ") + Math.abs(m.d).toFixed(1);
+      } else {
+        favSide = m.d > 0 ? "大分 Over" : "小分 Under";
+        badgeClass = m.d > 0 ? "over" : "under";
+        badgeText = (m.d > 0 ? "📈大 " : "📈小 ") + Math.abs(m.d).toFixed(1);
+      }
+      return '<li><span class="move-badge ' + badgeClass + '">' + badgeText + '</span>' +
+        '<div class="dir-mover-match">' + esc(m.away) + ' @ ' + esc(m.home) + '</div>' +
+        '<div class="dir-mover-side">' + favSide + ' 越來越被看好</div></li>';
+    }).join("");
+
+    return title +
+      '<div class="analysis-box"><p>比對每場最早與最新一筆賠率紀錄(伺服器每約 4 小時擷取),' +
+      '統計資金與盤口越來越看好的方向。僅列出隱含機率變動 ≥1 個百分點的場次。</p></div>' +
+      meter("勝負盤(獨贏)", awayN, homeN, "客隊", "主隊") +
+      meter("大小分", underN, overN, "小分", "大分") +
+      (moversHtml ? '<ul class="dir-movers">' + moversHtml + '</ul>' : "");
+  }
+
+  function hydrateLineDirection(candidates) {
+    var panel = document.getElementById("lineDirectionPanel");
+    if (!panel) return;
+    collectLineDirection(candidates).then(function (res) {
+      panel.innerHTML = lineDirectionHtml(res);
+    }).catch(function () {
+      panel.innerHTML = '<h2 class="side-panel-title">📈 盤口方向</h2><div class="empty-state">盤口方向資料載入失敗。</div>';
+    });
+  }
+
   // ---------- MLB data ----------
   function fetchMlbStandings(season) {
     return fetchJson("https://statsapi.mlb.com/api/v1/standings?leagueId=103,104&season=" + season)
@@ -1085,6 +1230,11 @@
         vetoed.map(function (c) { return pickCardHtml(c, "✗"); }).join("") + '</details>'
       : "";
     var keySet = !!getOddsApiKey();
+    var mainHtml =
+      sectionHtml("⚾ 首局 NRFI / YRFI", fi.slice(0, TOP_N), fi.length) +
+      vetoHtml +
+      sectionHtml("📊 大小分(MLB 全場總分 Over/Under)", ou.slice(0, TOP_N), ou.length) +
+      sectionHtml("🏆 獨贏勝率(MLB / NBA)", ml.slice(0, TOP_N), ml.length);
     el.innerHTML =
       '<div class="picks-intro analysis-box"><p>' +
       '共掃描 <b>' + candidates.length + '</b> 個候選,分為「首局 NRFI/YRFI」「大小分」與「獨贏勝率」三區,' +
@@ -1095,10 +1245,12 @@
       (keySet ? "🔑 NRFI/YRFI 實際賠率已啟用(The Odds API;點此更換金鑰)"
               : "🔑 設定免費 The Odds API 金鑰,即可用真實 NRFI/YRFI 賠率取代 -110 估算") +
       '</a></p></div>' +
-      sectionHtml("⚾ 首局 NRFI / YRFI", fi.slice(0, TOP_N), fi.length) +
-      vetoHtml +
-      sectionHtml("📊 大小分(MLB 全場總分 Over/Under)", ou.slice(0, TOP_N), ou.length) +
-      sectionHtml("🏆 獨贏勝率(MLB / NBA)", ml.slice(0, TOP_N), ml.length);
+      '<div class="picks-layout">' +
+        '<div class="picks-main">' + mainHtml + '</div>' +
+        '<aside class="side-panel" id="lineDirectionPanel">' +
+          '<div class="side-panel-loading"><div class="spinner"></div>統計盤口方向…</div>' +
+        '</aside>' +
+      '</div>';
     var lk = document.getElementById("oddsKeyLink");
     if (lk) lk.addEventListener("click", function (e) {
       e.preventDefault();
@@ -1111,6 +1263,7 @@
       } catch (err) {}
       run();
     });
+    hydrateLineDirection(candidates);
   }
 
   function run() {

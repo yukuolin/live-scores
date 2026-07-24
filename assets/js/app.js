@@ -11,7 +11,6 @@
   var state = {
     date: new Date(),
     filter: "all",
-    autoRefresh: true,
     notify: false,
     gamesByLeague: { mlb: [], nba: [], wnba: [] },
     errorByLeague: { mlb: null, nba: null, wnba: null },
@@ -20,8 +19,7 @@
     lastUpdatedStr: null,
   };
 
-  var sched = { timeout: null, nextAt: 0 };
-  var modal = { game: null, timer: null, betlog: false };
+  var modal = { game: null, timer: null };
   var sectionCache = {};
   var mlbFormCache = { t: 0, map: null };
 
@@ -287,317 +285,6 @@
     return close;
   }
 
-  // ---------- bet log ----------
-  function getBetLog() { try { return JSON.parse(store.get("betlog")) || []; } catch (e) { return []; } }
-  function saveBetLog(arr) { store.set("betlog", JSON.stringify(arr)); }
-
-  function recordBet(game, market, side) {
-    var od = game.odds;
-    if (!od) return null;
-    var price = null, line = null, s;
-    if (market === "ml") { s = side === "away" ? od.mlAway : od.mlHome; price = s && s.cur; }
-    else if (market === "sp") { s = side === "away" ? od.spAway : od.spHome; price = s && s.cur; line = s && s.line; }
-    else if (market === "ou") {
-      s = side === "over" ? od.over : od.under;
-      price = s && s.cur;
-      line = stripOU((s && s.line) || (od.overUnder !== null && od.overUnder !== undefined ? String(od.overUnder) : ""));
-    }
-    if (!price) return null;
-    var pick = {
-      id: "p" + Date.now() + Math.random().toString(36).slice(2, 6),
-      t: Date.now(),
-      gameId: game.id, league: game.league, espnId: game.espnId || null,
-      dateStr: toISODate(state.date), start: game.startTime || null,
-      away: game.away.name, home: game.home.name,
-      market: market, side: side, line: line || null, price: String(price),
-      stake: 1, live: game.status === "live",
-      result: null, close: null, fa: null, fh: null,
-    };
-    var picks = getBetLog();
-    picks.push(pick);
-    saveBetLog(picks);
-    return pick;
-  }
-
-  function gradePick(p, finalAway, finalHome) {
-    var fa = Number(finalAway), fh = Number(finalHome);
-    if (!isFinite(fa) || !isFinite(fh)) return null;
-    var diff;
-    if (p.market === "ml") diff = p.side === "away" ? fa - fh : fh - fa;
-    else if (p.market === "sp") {
-      var line = Number(p.line);
-      if (!isFinite(line)) return null;
-      diff = p.side === "away" ? fa + line - fh : fh + line - fa;
-    } else if (p.market === "ou") {
-      var tot = Number(p.line);
-      if (!isFinite(tot)) return null;
-      diff = p.side === "over" ? fa + fh - tot : tot - (fa + fh);
-    } else return null;
-    if (diff > 0) return "win";
-    if (diff < 0) return "loss";
-    return "push";
-  }
-
-  function pickProfit(p) {
-    if (p.result === "win") {
-      var o = Number(String(p.price).replace(/^\+/, ""));
-      if (isNaN(o) || o === 0) return 0;
-      return o > 0 ? p.stake * o / 100 : p.stake * 100 / (-o);
-    }
-    if (p.result === "loss") return -p.stake;
-    return 0;
-  }
-
-  function closePriceFromSnap(snap, p) {
-    if (!snap) return null;
-    var price = null, line = null;
-    if (p.market === "ml") price = p.side === "away" ? snap.mlA : snap.mlH;
-    else if (p.market === "sp") {
-      price = p.side === "away" ? snap.spAO : snap.spHO;
-      line = p.side === "away" ? snap.spA : snap.spH;
-    } else if (p.market === "ou") {
-      price = p.side === "over" ? snap.oO : snap.uO;
-      line = snap.tot;
-    }
-    return price ? { price: String(price), line: line || null } : null;
-  }
-  function closePriceFromOdds(od, p) {
-    if (!od) return null;
-    var s = null;
-    if (p.market === "ml") s = p.side === "away" ? od.mlAway : od.mlHome;
-    else if (p.market === "sp") s = p.side === "away" ? od.spAway : od.spHome;
-    else if (p.market === "ou") s = p.side === "over" ? od.over : od.under;
-    if (!s || !s.cur) return null;
-    return { price: String(s.cur), line: p.market === "ou" ? (stripOU(s.line) || p.line) : (s.line || null) };
-  }
-
-  // positive = the taken price beat the closing line (in probability points)
-  function clvPts(p) {
-    if (!p.close || !p.close.price) return null;
-    if (p.market !== "ml" && String(p.line) !== String(p.close.line)) return null;
-    var taken = impliedProb(p.price), close = impliedProb(p.close.price);
-    if (taken === null || close === null) return null;
-    return (close - taken) * 100;
-  }
-
-  // grade finished games and fill closing lines, then persist
-  function settleBets() {
-    var picks = getBetLog();
-    var now = Date.now();
-    var jobs = {}, histLeagues = {};
-    picks.forEach(function (p) {
-      var started = p.start && new Date(p.start).getTime() < now;
-      if (!p.result && started && FETCHERS[p.league] && p.dateStr) jobs[p.league + "|" + p.dateStr] = true;
-      if (!p.close && started && (p.league === "mlb" || p.league === "nba" || p.league === "wnba")) histLeagues[p.league] = true;
-    });
-    var fetches = Object.keys(jobs).map(function (k) {
-      var parts = k.split("|");
-      return FETCHERS[parts[0]](parts[1]).catch(function () { return []; });
-    });
-    var hists = Object.keys(histLeagues).map(function (lg) {
-      return fetchOddsHistory(lg).then(function (d) { return { lg: lg, data: d }; });
-    });
-    if (!fetches.length && !hists.length) return Promise.resolve(picks);
-    return Promise.all([Promise.all(fetches), Promise.all(hists)]).then(function (res) {
-      var gameMap = {};
-      res[0].forEach(function (games) {
-        games.forEach(function (g) { gameMap[g.id] = g; });
-      });
-      var histMap = {};
-      res[1].forEach(function (r) { histMap[r.lg] = r.data; });
-      var changed = false;
-      picks.forEach(function (p) {
-        var g = gameMap[p.gameId];
-        if (!p.result && g && g.status === "final") {
-          var r = gradePick(p, g.away.score, g.home.score);
-          if (r) { p.result = r; p.fa = g.away.score; p.fh = g.home.score; changed = true; }
-        }
-        if (!p.close) {
-          var entry = findHistEntry(histMap[p.league], p.espnId, p.away, p.home, p.start);
-          var cp = closePriceFromSnap(entry ? closingSnap(entry, p.start) : null, p);
-          if (!cp && g && g.status === "final") cp = closePriceFromOdds(g.odds, p);
-          if (cp) { p.close = cp; changed = true; }
-        }
-      });
-      if (changed) saveBetLog(picks);
-      return picks;
-    });
-  }
-
-  var MARKET_SIDES = {
-    ml: { away: "客勝", home: "主勝" },
-    sp: { away: "讓分(客)", home: "讓分(主)" },
-    ou: { over: "大分", under: "小分" },
-  };
-  function pickLabel(p) {
-    var base = MARKET_SIDES[p.market] ? (MARKET_SIDES[p.market][p.side] || "") : "";
-    if (p.market === "sp" || p.market === "ou") base += " " + (p.line || "");
-    return base;
-  }
-
-  function betStatsHtml(picks) {
-    var w = 0, l = 0, pu = 0, profit = 0, staked = 0;
-    var clvSum = 0, clvN = 0, clvBeat = 0;
-    picks.forEach(function (p) {
-      if (p.result === "win") w++;
-      else if (p.result === "loss") l++;
-      else if (p.result === "push") pu++;
-      if (p.result) { profit += pickProfit(p); staked += Number(p.stake) || 0; }
-      var c = clvPts(p);
-      if (c !== null) { clvSum += c; clvN++; if (c > 0) clvBeat++; }
-    });
-    var roi = staked > 0 ? (profit / staked) * 100 : null;
-    function tile(label, val, cls) {
-      return '<div class="bet-tile' + (cls ? " " + cls : "") + '"><span class="v">' + val + '</span><span class="k">' + label + '</span></div>';
-    }
-    var profCls = profit > 0 ? "pos" : profit < 0 ? "neg" : "";
-    var avgClv = clvN ? clvSum / clvN : null;
-    return '<div class="bet-tiles">' +
-      tile("戰績(勝-負-平)", w + "-" + l + "-" + pu) +
-      tile("淨盈虧(單位)", (profit >= 0 ? "+" : "") + profit.toFixed(2), profCls) +
-      tile("ROI", roi === null ? "-" : roi.toFixed(1) + "%", profCls) +
-      tile("平均 CLV", avgClv === null ? "-" : ((avgClv >= 0 ? "+" : "") + avgClv.toFixed(2) + " pts"),
-        avgClv === null ? "" : avgClv > 0 ? "pos" : avgClv < 0 ? "neg" : "") +
-      tile("贏過收盤線", clvN ? Math.round((clvBeat / clvN) * 100) + "%" : "-") +
-      '</div>';
-  }
-
-  function kellyBoxHtml() {
-    return '<div class="detail-section"><h3>Kelly / EV 計算機</h3>' +
-      '<div class="kelly-row">' +
-      '<label>自估勝率% <input id="kellyProb" type="number" min="1" max="99" step="0.5" value="55"></label>' +
-      '<label>美式賠率 <input id="kellyOdds" type="text" value="-110"></label>' +
-      '<label>資金 <input id="kellyBank" type="number" min="0" value="10000"></label>' +
-      '<button class="text-btn" id="kellyCalcBtn">計算</button>' +
-      '</div><div id="kellyOut" class="kelly-out"></div></div>';
-  }
-  function runKelly() {
-    var out = document.getElementById("kellyOut");
-    if (!out) return;
-    var prob = Number(document.getElementById("kellyProb").value) / 100;
-    var oddsStr = document.getElementById("kellyOdds").value;
-    var bank = Number(document.getElementById("kellyBank").value) || 0;
-    var o = Number(String(oddsStr).replace(/^\+/, ""));
-    if (!(prob > 0 && prob < 1) || isNaN(o) || o === 0) {
-      out.innerHTML = '<span class="neg">請輸入有效的勝率與美式賠率。</span>';
-      return;
-    }
-    var b = o > 0 ? o / 100 : 100 / (-o);
-    var q = 1 - prob;
-    var ev = prob * b - q; // per 1 unit staked
-    var breakeven = impliedProb(oddsStr);
-    if (ev <= 0) {
-      out.innerHTML = '損益兩平勝率 <b>' + pctStr(breakeven) + '</b>,你的估計 <b>' + pctStr(prob) +
-        '</b> → EV <span class="neg">' + (ev * 100).toFixed(1) + '%</span>,無優勢,不建議下注。';
-      return;
-    }
-    var kelly = (b * prob - q) / b;
-    var half = kelly / 2;
-    out.innerHTML = 'EV <span class="pos">+' + (ev * 100).toFixed(1) + '%</span> ・ 損益兩平勝率 ' + pctStr(breakeven) +
-      '<br>全 Kelly <b>' + (kelly * 100).toFixed(1) + '%</b>' + (bank ? '(' + Math.round(bank * kelly) + ')' : '') +
-      ' ・ 半 Kelly <b>' + (half * 100).toFixed(1) + '%</b>' + (bank ? '(<b>' + Math.round(bank * half) + '</b>)' : '') +
-      '<br><span class="detail-note">實務建議使用半 Kelly 以下,並確認勝率估計的穩健性。</span>';
-  }
-
-  function renderBetLogHtml(picks, settling) {
-    var html = '<div class="detail-header"><span class="detail-league">📒 注單紀錄</span>' +
-      (settling ? '<span class="status-pill scheduled">結算中…</span>' : '') + '</div>';
-    html += betStatsHtml(picks);
-    html += kellyBoxHtml();
-    if (!picks.length) {
-      html += '<div class="detail-section"><p class="detail-note">尚無注單。開啟任一場比賽的詳細資料,在賠率區點「記錄注單」即可把當下價位存進來;完賽後自動結算,並對比收盤線計算 CLV。</p></div>';
-      return html;
-    }
-    var rows = "";
-    picks.slice().reverse().forEach(function (p) {
-      var res = p.result === "win" ? '<span class="bet-res win">勝</span>' :
-        p.result === "loss" ? '<span class="bet-res loss">負</span>' :
-        p.result === "push" ? '<span class="bet-res push">平</span>' :
-        '<span class="bet-res pending">未結</span>';
-      var clv = clvPts(p);
-      var clvHtml = clv === null ? "-" :
-        '<span class="' + (clv > 0 ? "pos" : clv < 0 ? "neg" : "") + '">' + (clv >= 0 ? "+" : "") + clv.toFixed(2) + '</span>';
-      var closeHtml = p.close && p.close.price ? esc((p.close.line ? p.close.line + " " : "") + p.close.price) : "-";
-      var score = (p.result && p.fa !== null && p.fa !== undefined) ? (p.fa + ":" + p.fh) : "";
-      rows += '<tr>' +
-        '<td>' + esc(formatDateTime(p.start) || p.dateStr) +
-          '<br><span class="bet-match">' + esc(p.away) + ' @ ' + esc(p.home) + (score ? " (" + esc(score) + ")" : "") + '</span></td>' +
-        '<td>' + esc(pickLabel(p)) + (p.live ? ' <span class="bet-live-tag">滾球</span>' : '') + '</td>' +
-        '<td>' + esc(p.price) + '</td>' +
-        '<td>' + closeHtml + '</td>' +
-        '<td>' + clvHtml + '</td>' +
-        '<td><input class="bet-stake" data-id="' + esc(p.id) + '" type="number" min="0" step="0.5" value="' + (Number(p.stake) || 0) + '"></td>' +
-        '<td>' + res + '</td>' +
-        '<td><button class="bet-del" data-id="' + esc(p.id) + '" title="刪除">✕</button></td>' +
-        '</tr>';
-    });
-    html += '<div class="detail-section"><h3>注單明細</h3>' +
-      '<div class="table-wrap"><table class="stat-table" style="min-width:640px">' +
-      '<tr><th>比賽</th><th>投注</th><th>取得價</th><th>收盤價</th><th>CLV</th><th>注碼</th><th>結果</th><th></th></tr>' +
-      rows + '</table></div>' +
-      '<div class="bet-toolbar"><button class="text-btn" id="betExportBtn">匯出 CSV</button>' +
-      '<button class="text-btn danger" id="betClearBtn">清空全部</button></div>' +
-      '<div class="detail-note">CLV 為「取得價 vs 收盤價」的隱含機率差(百分點),正值代表贏過收盤線;讓分/大小若盤數移動則不計。收盤線來自本站每 20 分鐘的盤口採樣。</div>' +
-      '</div>';
-    return html;
-  }
-
-  function openBetLog() {
-    modal.game = null;
-    modal.betlog = true;
-    if (modal.timer) { clearInterval(modal.timer); modal.timer = null; }
-    var m = document.getElementById("modal");
-    m.classList.remove("hidden");
-    m.setAttribute("aria-hidden", "false");
-    document.body.style.overflow = "hidden";
-    document.getElementById("modalBody").innerHTML = renderBetLogHtml(getBetLog(), true);
-    settleBets().then(function (picks) {
-      if (!modal.betlog) return;
-      document.getElementById("modalBody").innerHTML = renderBetLogHtml(picks, false);
-    });
-  }
-
-  function setBetStake(id, val) {
-    var picks = getBetLog();
-    var p = picks.filter(function (x) { return x.id === id; })[0];
-    if (!p) return;
-    var n = Number(val);
-    p.stake = isFinite(n) && n >= 0 ? n : 1;
-    saveBetLog(picks);
-    var tiles = document.querySelector(".bet-tiles");
-    if (tiles) tiles.outerHTML = betStatsHtml(picks); // keep input focus, refresh stats only
-  }
-  function deleteBet(id) {
-    saveBetLog(getBetLog().filter(function (x) { return x.id !== id; }));
-    if (modal.betlog) document.getElementById("modalBody").innerHTML = renderBetLogHtml(getBetLog(), false);
-  }
-  function clearBets() {
-    if (!window.confirm("確定要清空所有注單紀錄?此動作無法復原。")) return;
-    saveBetLog([]);
-    if (modal.betlog) document.getElementById("modalBody").innerHTML = renderBetLogHtml([], false);
-  }
-  function exportBetsCsv() {
-    var picks = getBetLog();
-    var head = "date,league,away,home,market,side,line,price,stake,result,close_line,close_price,clv_pts";
-    var lines = picks.map(function (p) {
-      var clv = clvPts(p);
-      return [p.start || p.dateStr, p.league, p.away, p.home, p.market, p.side, p.line || "", p.price,
-        p.stake, p.result || "", (p.close && p.close.line) || "", (p.close && p.close.price) || "",
-        clv === null ? "" : clv.toFixed(2)
-      ].map(function (v) {
-        v = String(v);
-        return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
-      }).join(",");
-    });
-    var blob = new Blob(["\ufeff" + head + "\n" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
-    var a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = "betlog-" + toISODate(new Date()) + ".csv";
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
-  }
-
   // ---------- pins ----------
   var pinSet = (function () {
     try { return new Set(JSON.parse(store.get("pins")) || []); } catch (e) { return new Set(); }
@@ -792,44 +479,10 @@
     return false;
   }
 
-  // ---------- adaptive refresh ----------
-  function computeInterval() {
-    var keys = state.filter === "all" ? LEAGUE_ORDER : [state.filter];
-    var anyLive = false, anyPre = false;
-    keys.forEach(function (k) {
-      state.gamesByLeague[k].forEach(function (g) {
-        if (g.status === "live") anyLive = true;
-        if (g.status === "scheduled") anyPre = true;
-      });
-    });
-    if (anyLive) return 10000;
-    if (anyPre && isSameDay(state.date, new Date())) return 30000;
-    return 60000;
-  }
-
-  function scheduleNext() {
-    if (sched.timeout) clearTimeout(sched.timeout);
-    sched.timeout = null;
-    if (!state.autoRefresh) { sched.nextAt = 0; updateStatusText(); return; }
-    var iv = computeInterval();
-    sched.nextAt = Date.now() + iv;
-    sched.timeout = setTimeout(function () {
-      if (document.hidden) { scheduleNext(); return; }
-      loadAll().then(scheduleNext);
-    }, iv);
-  }
-
   function updateStatusText() {
     var el = document.getElementById("updatedAt");
     if (!el) return;
-    var txt = state.lastUpdatedStr ? "最後更新 " + state.lastUpdatedStr : "尚未更新";
-    if (!state.autoRefresh) {
-      txt += " · 自動更新關閉";
-    } else if (sched.nextAt) {
-      var s = Math.max(0, Math.round((sched.nextAt - Date.now()) / 1000));
-      txt += " · " + s + " 秒後更新";
-    }
-    el.textContent = txt;
+    el.textContent = state.lastUpdatedStr ? "最後更新 " + state.lastUpdatedStr : "尚未更新";
   }
 
   // ---------- scoreboard render ----------
@@ -1056,7 +709,6 @@
         html += sectionBlock("賠率" + (od.provider ? "(" + od.provider + ")" : ""),
           '<div class="table-wrap"><table class="stat-table" style="min-width:320px">' +
           '<tr><th>市場</th><th>開盤</th><th>目前</th></tr>' + rows + '</table></div>' +
-          betButtonsHtml(game) +
           espnMoveNote(od, game) +
           '<div class="detail-note">美式賠率,僅供參考。</div>');
       }
@@ -1074,23 +726,6 @@
         '<div class="detail-note">僅記錄本瀏覽器開啟頁面期間觀測到的變化。</div>');
     }
     return html;
-  }
-
-  function betButtonsHtml(game) {
-    var od = game.odds;
-    if (!od || game.status === "final" || game.status === "postponed") return "";
-    var btns = "";
-    function b(market, side, label) {
-      btns += '<button class="bet-rec" data-market="' + market + '" data-side="' + side + '">' + esc(label) + '</button>';
-    }
-    if (od.mlAway && od.mlAway.cur) b("ml", "away", "客勝 " + od.mlAway.cur);
-    if (od.mlHome && od.mlHome.cur) b("ml", "home", "主勝 " + od.mlHome.cur);
-    if (od.spAway && od.spAway.cur) b("sp", "away", "客 " + (od.spAway.line || "") + " " + od.spAway.cur);
-    if (od.spHome && od.spHome.cur) b("sp", "home", "主 " + (od.spHome.line || "") + " " + od.spHome.cur);
-    if (od.over && od.over.cur) b("ou", "over", "大 " + stripOU(od.over.line) + " " + od.over.cur);
-    if (od.under && od.under.cur) b("ou", "under", "小 " + stripOU(od.under.line) + " " + od.under.cur);
-    if (!btns) return "";
-    return '<div class="bet-actions"><span class="bet-actions-label">記錄注單:</span>' + btns + '</div>';
   }
 
   // ---------- line movement analysis (which side the market is warming to) ----------
@@ -1945,7 +1580,6 @@
 
   function openDetail(game) {
     modal.game = game;
-    modal.betlog = false;
     var m = document.getElementById("modal");
     m.classList.remove("hidden");
     m.setAttribute("aria-hidden", "false");
@@ -1965,7 +1599,6 @@
 
   function closeDetail() {
     modal.game = null;
-    modal.betlog = false;
     if (modal.timer) { clearInterval(modal.timer); modal.timer = null; }
     var m = document.getElementById("modal");
     m.classList.add("hidden");
@@ -1974,16 +1607,12 @@
   }
 
   // ---------- controls ----------
-  function loadAndReschedule() {
-    return loadAll().then(scheduleNext);
-  }
-
   function setFilter(key) {
     state.filter = key;
     document.querySelectorAll(".tab").forEach(function (t) {
       t.classList.toggle("active", t.dataset.league === key);
     });
-    loadAndReschedule();
+    loadAll();
   }
 
   function clearGames() {
@@ -1998,13 +1627,13 @@
     d.setDate(d.getDate() + days);
     state.date = d;
     clearGames();
-    loadAndReschedule();
+    loadAll();
   }
 
   function goToday() {
     state.date = new Date();
     clearGames();
-    loadAndReschedule();
+    loadAll();
   }
 
   function retryLeague(key) {
@@ -2031,14 +1660,10 @@
     document.getElementById("dateLabel").addEventListener("click", goToday);
     document.getElementById("refreshBtn").addEventListener("click", function (e) {
       e.currentTarget.classList.add("spinning");
-      loadAndReschedule().then(function () {
+      loadAll().then(function () {
         var b = document.getElementById("refreshBtn");
         if (b) b.classList.remove("spinning");
       });
-    });
-    document.getElementById("autoRefreshToggle").addEventListener("change", function (e) {
-      state.autoRefresh = e.target.checked;
-      scheduleNext();
     });
     document.getElementById("notifBtn").addEventListener("click", function () {
       if (state.notify) {
@@ -2089,38 +1714,8 @@
     document.getElementById("modalClose").addEventListener("click", closeDetail);
     document.getElementById("modalBackdrop").addEventListener("click", closeDetail);
 
-    // bet log: header button + delegated actions inside the modal
-    document.getElementById("betlogBtn").addEventListener("click", openBetLog);
-    document.getElementById("modalBody").addEventListener("click", function (e) {
-      var rec = e.target.closest(".bet-rec");
-      if (rec && modal.game) {
-        var pick = recordBet(modal.game, rec.dataset.market, rec.dataset.side);
-        if (pick) {
-          rec.classList.add("done");
-          rec.disabled = true;
-          rec.textContent = "✓ 已記錄";
-        }
-        return;
-      }
-      var del = e.target.closest(".bet-del");
-      if (del) { deleteBet(del.dataset.id); return; }
-      if (e.target.id === "kellyCalcBtn") { runKelly(); return; }
-      if (e.target.id === "betExportBtn") { exportBetsCsv(); return; }
-      if (e.target.id === "betClearBtn") { clearBets(); return; }
-    });
-    document.getElementById("modalBody").addEventListener("change", function (e) {
-      var inp = e.target.closest(".bet-stake");
-      if (inp) setBetStake(inp.dataset.id, inp.value);
-    });
     document.addEventListener("keydown", function (e) {
       if (e.key === "Escape" && modal.game) closeDetail();
-    });
-
-    // resume immediately when tab becomes visible again
-    document.addEventListener("visibilitychange", function () {
-      if (!document.hidden && state.autoRefresh && sched.nextAt && Date.now() > sched.nextAt) {
-        loadAndReschedule();
-      }
     });
 
     var savedTheme = store.get("scoreapp-theme");
@@ -2138,8 +1733,7 @@
 
     // instant paint from last snapshot, then refresh
     if (restoreSnapshot()) render();
-    loadAndReschedule();
-    setInterval(updateStatusText, 1000);
+    loadAll();
   }
 
   document.addEventListener("DOMContentLoaded", init);

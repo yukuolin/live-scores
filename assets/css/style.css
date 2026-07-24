@@ -156,17 +156,6 @@ body {
   min-width: 84px;
   text-align: center;
 }
-.auto-toggle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--text-dim);
-  cursor: pointer;
-  margin-left: 4px;
-}
-.auto-toggle input { cursor: pointer; }
-
 /* Content */
 .content {
   flex: 1;
@@ -504,104 +493,9 @@ body {
   .updated-at { display: none; }
 }
 
-/* ---------- bet log / odds history ---------- */
+/* ---------- odds history ---------- */
 .pos { color: #34c07c; }
 .neg { color: #ef4444; }
-
-.bet-actions {
-  display: flex; flex-wrap: wrap; align-items: center;
-  gap: 6px; margin-top: 10px;
-}
-.bet-actions-label { font-size: 12px; color: var(--text-faint); margin-right: 2px; }
-.bet-rec {
-  font: inherit; font-size: 12px;
-  padding: 4px 10px;
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  background: var(--bg-card);
-  color: var(--text-dim);
-  cursor: pointer;
-  font-variant-numeric: tabular-nums;
-}
-.bet-rec:hover { border-color: var(--accent); color: var(--text); }
-.bet-rec.done { border-color: #34c07c; color: #34c07c; cursor: default; }
-
-.bet-tiles {
-  display: flex; flex-wrap: wrap; gap: 8px;
-  margin-top: 16px;
-}
-.bet-tile {
-  flex: 1 1 100px;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 10px 12px;
-  display: flex; flex-direction: column; gap: 2px;
-}
-.bet-tile .v { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
-.bet-tile .k { font-size: 11px; color: var(--text-faint); }
-.bet-tile.pos .v { color: #34c07c; }
-.bet-tile.neg .v { color: #ef4444; }
-
-.bet-res {
-  display: inline-block; min-width: 26px; text-align: center;
-  font-size: 11px; font-weight: 700;
-  padding: 2px 7px; border-radius: 10px;
-}
-.bet-res.win { background: rgba(52, 192, 124, 0.15); color: #34c07c; }
-.bet-res.loss { background: var(--live-bg); color: var(--live); }
-.bet-res.push { background: var(--final-bg); color: var(--text-dim); }
-.bet-res.pending { background: var(--scheduled-bg); color: var(--accent); }
-
-.bet-match { font-size: 11px; color: var(--text-faint); }
-.bet-live-tag {
-  font-size: 10px; color: var(--live);
-  border: 1px solid var(--live); border-radius: 8px;
-  padding: 0 5px; margin-left: 3px;
-}
-.bet-stake {
-  width: 58px;
-  font: inherit; font-size: 12px;
-  padding: 3px 6px;
-  border: 1px solid var(--border); border-radius: 6px;
-  background: var(--bg-elev); color: var(--text);
-}
-.bet-del {
-  font: inherit; font-size: 11px;
-  border: none; background: none; cursor: pointer;
-  color: var(--text-faint); padding: 4px;
-}
-.bet-del:hover { color: var(--live); }
-.bet-toolbar { display: flex; gap: 10px; margin-top: 12px; }
-
-.text-btn {
-  font: inherit; font-size: 12px;
-  padding: 5px 12px;
-  border: 1px solid var(--border); border-radius: 8px;
-  background: var(--bg-card); color: var(--text-dim);
-  cursor: pointer;
-}
-.text-btn:hover { border-color: var(--accent); color: var(--text); }
-.text-btn.danger:hover { border-color: var(--live); color: var(--live); }
-
-.kelly-row {
-  display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px;
-}
-.kelly-row label {
-  display: flex; flex-direction: column; gap: 3px;
-  font-size: 11px; color: var(--text-faint);
-}
-.kelly-row input {
-  width: 86px;
-  font: inherit; font-size: 13px;
-  padding: 5px 8px;
-  border: 1px solid var(--border); border-radius: 6px;
-  background: var(--bg-elev); color: var(--text);
-}
-.kelly-out {
-  margin-top: 10px; font-size: 13px; line-height: 1.7;
-  color: var(--text-dim); font-variant-numeric: tabular-nums;
-}
 
 .close-row td { background: var(--scheduled-bg); }
 .close-tag {

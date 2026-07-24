@@ -713,6 +713,12 @@ a.icon-btn.nav-link { text-decoration: none; }
   padding-bottom: 6px;
   border-bottom: 1px solid var(--border);
 }
+.side-panel-subtitle {
+  font-size: 13px; font-weight: 700;
+  margin: 18px 0 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
 .side-panel-loading { padding: 24px 0; text-align: center; color: var(--text-faint); font-size: 12px; }
 .side-panel-loading .spinner {
   width: 20px; height: 20px;

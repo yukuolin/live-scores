@@ -405,7 +405,7 @@
     })).then(function (files) {
       var byLeague = {};
       files.forEach(function (f) { byLeague[f.lg] = f.d; });
-      var mlMoves = [], totMoves = [];
+      var mlMoves = [], totMoves = [], lineMoves = [];
       games.forEach(function (g) {
         var data = byLeague[g.league === "NBA" ? "nba" : "mlb"];
         var entry = findLineHistEntry(data, g.away, g.home, g.start);
@@ -424,6 +424,10 @@
           totD = lineDir.d > 0 ? mag : -mag;
           lineFrom = lineDir.from;
           lineTo = lineDir.to;
+          lineMoves.push({
+            away: g.away, home: g.home, league: g.league,
+            d: lineDir.d, from: lineDir.from, to: lineDir.to,
+          });
         } else {
           totD = totPriceD;
         }
@@ -431,8 +435,8 @@
           totMoves.push({ away: g.away, home: g.home, league: g.league, d: totD, lineFrom: lineFrom, lineTo: lineTo });
         }
       });
-      return { mlMoves: mlMoves, totMoves: totMoves, scanned: games.length };
-    }).catch(function () { return { mlMoves: [], totMoves: [], scanned: games.length }; });
+      return { mlMoves: mlMoves, totMoves: totMoves, lineMoves: lineMoves, scanned: games.length };
+    }).catch(function () { return { mlMoves: [], totMoves: [], lineMoves: [], scanned: games.length }; });
   }
 
   function lineDirectionHtml(res) {
@@ -483,12 +487,30 @@
         '<div class="dir-mover-side">' + favSide + ' 越來越被看好' + lineNote + '</div></li>';
     }).join("");
 
+    var lineMoves = (res.lineMoves || []).slice().sort(function (a, b) { return Math.abs(b.d) - Math.abs(a.d); });
+    var raisedN = lineMoves.filter(function (m) { return m.d > 0; }).length;
+    var loweredN = lineMoves.filter(function (m) { return m.d < 0; }).length;
+    var lineMovesHtml = lineMoves.map(function (m) {
+      var up = m.d > 0;
+      return '<li><span class="move-badge ' + (up ? "over" : "under") + '">' +
+        (up ? "📈上調 " : "📉下調 ") + Math.abs(m.d).toFixed(1) + '</span>' +
+        '<div class="dir-mover-match">' + esc(m.away) + ' @ ' + esc(m.home) + '</div>' +
+        '<div class="dir-mover-side">總分線 ' + esc(m.from) + ' → ' + esc(m.to) + '</div></li>';
+    }).join("");
+    var lineSectionHtml = "";
+    if (lineMoves.length) {
+      lineSectionHtml = '<h3 class="side-panel-subtitle">📏 總分線調整</h3>' +
+        meter("總分線調整", loweredN, raisedN, "下調", "上調") +
+        '<ul class="dir-movers">' + lineMovesHtml + '</ul>';
+    }
+
     return title +
       '<div class="analysis-box"><p>比對每場最早與最新一筆賠率紀錄(伺服器每約 4 小時擷取),' +
       '統計資金與盤口越來越看好的方向。僅列出隱含機率變動 ≥1 個百分點的場次。</p></div>' +
       meter("勝負盤(獨贏)", awayN, homeN, "客隊", "主隊") +
       meter("大小分", underN, overN, "小分", "大分") +
-      (moversHtml ? '<ul class="dir-movers">' + moversHtml + '</ul>' : "");
+      (moversHtml ? '<ul class="dir-movers">' + moversHtml + '</ul>' : "") +
+      lineSectionHtml;
   }
 
   function hydrateLineDirection(candidates) {

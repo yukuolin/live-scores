@@ -1733,7 +1733,17 @@
 
     // instant paint from last snapshot, then refresh
     if (restoreSnapshot()) render();
-    loadAll();
+    loadAll().then(openGameFromQuery);
+  }
+
+  // deep link from other pages (e.g. line-direction.html): ?game=<id> opens
+  // that game's detail modal once today's games have loaded
+  function openGameFromQuery() {
+    var gid;
+    try { gid = new URLSearchParams(location.search).get("game"); } catch (e) { return; }
+    if (!gid) return;
+    var g = findGame(gid);
+    if (g) openDetail(g);
   }
 
   document.addEventListener("DOMContentLoaded", init);

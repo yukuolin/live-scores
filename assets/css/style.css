@@ -703,10 +703,21 @@ a.icon-btn.nav-link { text-decoration: none; }
 .dir-meter-label b { color: var(--text); font-variant-numeric: tabular-nums; }
 
 .dir-movers { list-style: none; margin: 14px 0 0; padding: 0; }
-.dir-movers li { padding: 8px 0; border-top: 1px dashed var(--border); }
-.dir-movers li:first-child { border-top: none; padding-top: 0; }
+.dir-movers li { border-top: 1px dashed var(--border); }
+.dir-movers li:first-child { border-top: none; }
 .dir-mover-match { font-size: 12px; font-weight: 700; margin-top: 5px; }
 .dir-mover-side { font-size: 11px; color: var(--text-faint); margin-top: 2px; }
+.dir-mover-link {
+  display: block;
+  padding: 8px 6px;
+  margin: 0 -6px;
+  border-radius: 8px;
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.dir-mover-link:hover { background: var(--bg-elev); }
 .dir-mover-line {
   display: inline-block; margin-left: 6px;
   color: var(--accent); font-variant-numeric: tabular-nums;

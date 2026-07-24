@@ -56,7 +56,10 @@
             var status = g.status || {};
             if (status.abstractGameState === "Preview" &&
                 !/Postponed|Suspended|Cancelled/i.test(status.detailedState || "")) {
-              games.push({ league: "MLB", away: g.teams.away.team.name, home: g.teams.home.team.name, start: g.gameDate });
+              games.push({
+                league: "MLB", away: g.teams.away.team.name, home: g.teams.home.team.name,
+                start: g.gameDate, gid: "mlb-" + g.gamePk,
+              });
             }
           });
         });
@@ -76,7 +79,10 @@
           var comp = ev.competitions[0];
           var home = (comp.competitors || []).find(function (c) { return c.homeAway === "home"; });
           var away = (comp.competitors || []).find(function (c) { return c.homeAway === "away"; });
-          return { league: leagueLabel, away: away.team.displayName, home: home.team.displayName, start: ev.date };
+          return {
+            league: leagueLabel, away: away.team.displayName, home: home.team.displayName,
+            start: ev.date, gid: leagueKey + "-" + ev.id,
+          };
         });
       })
       .catch(function () { return []; });
@@ -164,7 +170,7 @@
         if (!entry || !entry.snaps || entry.snaps.length < 2) return;
         var mlD = pairShift(entry.snaps, "mlA", "mlH"); // >0 home gaining, <0 away gaining
         if (mlD !== null && Math.abs(mlD) >= 1) {
-          mlMoves.push({ away: g.away, home: g.home, league: g.league, d: mlD });
+          mlMoves.push({ away: g.away, home: g.home, league: g.league, gid: g.gid, d: mlD });
         }
         var totPriceD = pairShift(entry.snaps, "uO", "oO"); // >0 over gaining, <0 under gaining
         var lineDir = totalLineDir(entry.snaps); // >0 line raised, <0 line lowered
@@ -177,14 +183,14 @@
           lineFrom = lineDir.from;
           lineTo = lineDir.to;
           lineMoves.push({
-            away: g.away, home: g.home, league: g.league,
+            away: g.away, home: g.home, league: g.league, gid: g.gid,
             d: lineDir.d, from: lineDir.from, to: lineDir.to,
           });
         } else {
           totD = totPriceD;
         }
         if (totD !== null && Math.abs(totD) >= 1) {
-          totMoves.push({ away: g.away, home: g.home, league: g.league, d: totD, lineFrom: lineFrom, lineTo: lineTo });
+          totMoves.push({ away: g.away, home: g.home, league: g.league, gid: g.gid, d: totD, lineFrom: lineFrom, lineTo: lineTo });
         }
       });
       return { mlMoves: mlMoves, totMoves: totMoves, lineMoves: lineMoves, scanned: games.length };
@@ -192,6 +198,17 @@
   }
 
   // ---------- render ----------
+  function gameHref(gid) {
+    return gid ? "index.html?game=" + encodeURIComponent(gid) : null;
+  }
+  // wraps a mover row's content in a link to that game's analysis page when
+  // we have its id; falls back to a plain (non-clickable) row otherwise
+  function moverLi(gid, inner) {
+    var href = gameHref(gid);
+    return href
+      ? '<li><a class="dir-mover-link" href="' + esc(href) + '">' + inner + '</a></li>'
+      : '<li>' + inner + '</li>';
+  }
   function meter(label, leftN, rightN, leftLabel, rightLabel) {
     if (!leftN && !rightN) return "";
     return '<div class="dir-meter">' +
@@ -221,9 +238,9 @@
     var overN = res.totMoves.filter(function (m) { return m.d > 0; }).length;
     var underN = res.totMoves.filter(function (m) { return m.d < 0; }).length;
 
-    var movers = res.mlMoves.map(function (m) { return { away: m.away, home: m.home, d: m.d, kind: "ml" }; })
+    var movers = res.mlMoves.map(function (m) { return { away: m.away, home: m.home, gid: m.gid, d: m.d, kind: "ml" }; })
       .concat(res.totMoves.map(function (m) {
-        return { away: m.away, home: m.home, d: m.d, kind: "tot", lineFrom: m.lineFrom, lineTo: m.lineTo };
+        return { away: m.away, home: m.home, gid: m.gid, d: m.d, kind: "tot", lineFrom: m.lineFrom, lineTo: m.lineTo };
       }));
     movers.sort(function (a, b) { return Math.abs(b.d) - Math.abs(a.d); });
     var moversHtml = movers.map(function (m) {
@@ -240,9 +257,9 @@
       var lineNote = (m.kind === "tot" && m.lineFrom !== null && m.lineFrom !== undefined && m.lineFrom !== m.lineTo)
         ? '<span class="dir-mover-line">總分線 ' + esc(m.lineFrom) + ' → ' + esc(m.lineTo) + '</span>'
         : "";
-      return '<li><span class="move-badge ' + badgeClass + '">' + badgeText + '</span>' +
+      return moverLi(m.gid, '<span class="move-badge ' + badgeClass + '">' + badgeText + '</span>' +
         '<div class="dir-mover-match">' + esc(m.away) + ' @ ' + esc(m.home) + '</div>' +
-        '<div class="dir-mover-side">' + favSide + ' 越來越被看好' + lineNote + '</div></li>';
+        '<div class="dir-mover-side">' + favSide + ' 越來越被看好' + lineNote + '</div>');
     }).join("");
 
     html += '<div class="detail-section"><h3>📈 資金與盤口動能</h3>' +
@@ -257,10 +274,10 @@
       var loweredN = lineMoves.filter(function (m) { return m.d < 0; }).length;
       var lineMovesHtml = lineMoves.map(function (m) {
         var up = m.d > 0;
-        return '<li><span class="move-badge ' + (up ? "over" : "under") + '">' +
+        return moverLi(m.gid, '<span class="move-badge ' + (up ? "over" : "under") + '">' +
           (up ? "📈上調 " : "📉下調 ") + Math.abs(m.d).toFixed(1) + '</span>' +
           '<div class="dir-mover-match">' + esc(m.away) + ' @ ' + esc(m.home) + '</div>' +
-          '<div class="dir-mover-side">總分線 ' + esc(m.from) + ' → ' + esc(m.to) + '</div></li>';
+          '<div class="dir-mover-side">總分線 ' + esc(m.from) + ' → ' + esc(m.to) + '</div>');
       }).join("");
       html += '<div class="detail-section"><h3>📏 總分線調整</h3>' +
         meter("總分線調整", loweredN, raisedN, "下調", "上調") +
